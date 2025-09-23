@@ -6,6 +6,13 @@ import pandas as pd
 from PIL import Image
 import tempfile
 import fitz  # PyMuPDF for PDF rendering
+import json
+from google.oauth2 import service_account
+
+creds = service_account.Credentials.from_service_account_info(
+    json.loads(st.secrets["google"]["credentials"])
+)
+client = documentai.DocumentProcessorServiceClient(credentials=creds)
 
 # Set up Streamlit page
 st.set_page_config(page_title="Receipt Parser", layout="wide")
@@ -21,7 +28,11 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "malaysia-receipt-saas-3cb9875869
 def process_document(file_path, mime_type):
     try:
         client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
-        client = documentai.DocumentProcessorServiceClient(client_options=client_options)
+                client = documentai.DocumentProcessorServiceClient(
+                     client_options=client_options,
+                     credentials=creds
+                 )
+
         name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
 
         with open(file_path, "rb") as f:
