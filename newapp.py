@@ -209,4 +209,4 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"❌ Failed to send feedback: {e}")
     else:
-        st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
+        st.warning("⚠️ No document returned. Please check your processor ID or credentials.") 
