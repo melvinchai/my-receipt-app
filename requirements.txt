@@ -3,3 +3,4 @@ google-cloud-documentai
 google-auth
 Pillow
 pymupdf
+pdf2image
