@@ -10,14 +10,10 @@ from google.oauth2 import service_account
 import smtplib
 from email.mime.text import MIMEText
 
-# Load credentials
+# Load credentials from secrets
 creds = service_account.Credentials.from_service_account_info(
     json.loads(st.secrets["google"]["credentials"])
 )
-# sender gmail and secrets
-sender_email = st.secrets["email"]["sender"]
-app_password = st.secrets["email"]["app_password"]
-server.login(sender_email, app_password)
 
 # Streamlit setup
 st.set_page_config(page_title="Receipt Parser", layout="wide")
@@ -66,6 +62,8 @@ FIELD_ALIASES = {
     "purchase_date": "invoice_date",
     "receipt_date": "invoice_date",
     "date_of_receipt": "invoice_date",
+    "transaction_date": "invoice_date",
+    "date": "invoice_date",
     "receipt_total": "invoice_total",
     "total_amount": "invoice_total",
     "amount_due": "invoice_total",
@@ -187,13 +185,16 @@ if uploaded_file:
         feedback = st.text_area("Comment or correction", placeholder="Type your feedback here...")
         if st.button("Send Feedback"):
             try:
+                sender_email = st.secrets["email"]["sender"]
+                app_password = st.secrets["email"]["app_password"]
+
                 msg = MIMEText(feedback)
                 msg["Subject"] = "Receipt Parser Feedback"
-                msg["From"] = "your-sender-email@gmail.com"
-                msg["To"] = "melvinchia8@gmail.com"
+                msg["From"] = sender_email
+                msg["To"] = sender_email  # sending to yourself
 
                 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                    server.login("your-sender-email@gmail.com", "your-app-password")
+                    server.login(sender_email, app_password)
                     server.send_message(msg)
 
                 st.success("✅ Feedback sent to Melvin!")
