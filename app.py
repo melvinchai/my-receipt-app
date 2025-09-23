@@ -74,7 +74,7 @@ if uploaded_file:
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         else:
             img = Image.open(tmp_path)
-        st.image(img, caption="Uploaded Receipt", use_column_width=True)
+        st.image(img, caption="Uploaded Receipt", use_container_width=True)
     except Exception as e:
         st.warning(f"⚠️ Could not display image: {e}")
 
