@@ -6,8 +6,6 @@ from PIL import Image
 import tempfile
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
-import smtplib
-from email.mime.text import MIMEText
 
 # Load credentials from individual secrets keys
 google_creds = {
@@ -188,25 +186,5 @@ if uploaded_file:
                 st.dataframe(pd.DataFrame(invoice_total_candidates))
             else:
                 st.info("No candidates found for `invoice_total`.")
-
-        st.subheader("💬 Feedback Loop")
-        feedback = st.text_area("Comment or correction", placeholder="Type your feedback here...")
-        if st.button("Send Feedback"):
-            try:
-                sender_email = st.secrets["email"]["sender"]
-                app_password = st.secrets["email"]["app_password"]
-
-                msg = MIMEText(feedback)
-                msg["Subject"] = "Receipt Parser Feedback"
-                msg["From"] = sender_email
-                msg["To"] = sender_email
-
-                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                    server.login(sender_email, app_password)
-                    server.send_message(msg)
-
-                st.success("✅ Feedback sent to Melvin!")
-            except Exception as e:
-                st.error(f"❌ Failed to send feedback: {e}")
     else:
-        st.warning("⚠️ No document returned. Please check your processor ID or credentials.") 
+        st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
