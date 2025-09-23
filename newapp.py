@@ -5,21 +5,21 @@ import json
 import pandas as pd
 from PIL import Image
 import tempfile
-import fitz  # PyMuPDF for PDF rendering
+import fitz  # PyMuPDF
 from google.oauth2 import service_account
 import smtplib
 from email.mime.text import MIMEText
 
-# Load credentials from Streamlit Secrets
+# Load credentials
 creds = service_account.Credentials.from_service_account_info(
     json.loads(st.secrets["google"]["credentials"])
 )
 
-# Set up Streamlit page
+# Streamlit setup
 st.set_page_config(page_title="Receipt Parser", layout="wide")
 st.title("📄 v1 Malaysian Receipt Parser with Document AI")
 
-# GCP Configuration
+# GCP config
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
@@ -57,7 +57,7 @@ def extract_entities(document):
             })
     return pd.DataFrame(entities)
 
-# ✅ Enhanced summary extractor with aliasing and conflict resolution
+# ✅ Enhanced summary extractor with aliasing and fallback
 def extract_summary(document):
     summary = {}
     FIELD_ALIASES = {
@@ -90,7 +90,7 @@ def extract_summary(document):
 
     return summary
 
-# Upload and process receipt
+# Upload and process
 uploaded_file = st.file_uploader("Upload a receipt (image or PDF)", type=["jpg", "jpeg", "png", "pdf"])
 if uploaded_file:
     mime_type = "application/pdf" if uploaded_file.type == "application/pdf" else "image/jpeg"
@@ -146,7 +146,7 @@ if uploaded_file:
             st.info("No entities found in the document.")
 
         st.subheader("💬 Feedback Loop")
-        feedback = st.text_area("Leave a comment or correction here")
+        feedback = st.text_area("Comment or correction", placeholder="Type your feedback here...")
         if st.button("Send Feedback"):
             try:
                 msg = MIMEText(feedback)
