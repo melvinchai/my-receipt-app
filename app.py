@@ -15,7 +15,7 @@ creds = service_account.Credentials.from_service_account_info(
 
 # Set up Streamlit page
 st.set_page_config(page_title="Receipt Parser", layout="wide")
-st.title("📄 Malaysian Receipt Parser with Document AI")
+st.title("📄 v1 Malaysian Receipt Parser with Document AI")
 
 # GCP Configuration
 PROJECT_ID = "malaysia-receipt-saas"
