@@ -57,26 +57,25 @@ def extract_entities(document):
             })
     return pd.DataFrame(entities)
 
-# ✅ Updated summary extractor with aliasing
+# ✅ Updated summary extractor with aliasing and fixed order
 def extract_summary(document):
     summary = {}
     FIELD_ALIASES = {
-        "invoice_total": "total_amount",
-        "amount_paid": "total_amount",
-        "amount": "total_amount",
-        "purchase_date": "receipt_date",
-        "date_of_receipt": "receipt_date"
+        "purchase_date": "invoice_date",
+        "receipt_date": "invoice_date",
+        "date_of_receipt": "invoice_date"
     }
+
+    desired_fields = ["invoice_date", "brand_name", "invoice_total"]
 
     if document and document.entities:
         for entity in document.entities:
-            if entity.type_ in [
-                "merchant_name", "total_amount", "receipt_date", "category",
-                "amount_paid", "amount", "purchase_date", "date_of_receipt",
-                "invoice_total"
-            ]:
-                key = FIELD_ALIASES.get(entity.type_, entity.type_)
+            key = FIELD_ALIASES.get(entity.type_, entity.type_)
+            if key in desired_fields:
                 summary[key] = entity.mention_text
+
+    for field in desired_fields:
+        summary.setdefault(field, "")
 
     return summary
 
@@ -112,8 +111,8 @@ if uploaded_file:
         st.subheader("📋 Summary Box: Fields to be downloaded for Excel")
         summary = extract_summary(document)
         if summary:
-            for field, value in summary.items():
-                st.write(f"**{field.replace('_', ' ').title()}:** {value}")
+            for field in ["invoice_date", "brand_name", "invoice_total"]:
+                st.write(f"**{field.replace('_', ' ').title()}:** {summary[field]}")
 
             df = pd.DataFrame([summary])
             csv = df.to_csv(index=False).encode("utf-8")
