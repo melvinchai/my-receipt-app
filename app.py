@@ -73,4 +73,54 @@ if uploaded_file:
             doc = fitz.open(tmp_path)
             page = doc.load_page(0)
             pix = page.get_pixmap()
-            img = Image.frombytes("RGB", [pix.width, pix.height],
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        else:
+            img = Image.open(tmp_path)
+
+        st.image(img, caption="Uploaded Receipt", use_container_width=True)
+    except Exception as e:
+        st.warning(f"⚠️ Could not display image: {e}")
+
+    document = process_document(tmp_path, mime_type)
+
+    if document:
+        st.subheader("🧠 Extracted Text")
+        st.text_area("Full Text", extract_text(document), height=300)
+
+        st.subheader("📋 Summary Box: Fields to be downloaded for Excel")
+        summary = extract_summary(document)
+        if summary:
+            for field, value in summary.items():
+                st.write(f"**{field.replace('_', ' ').title()}:** {value}")
+
+            df = pd.DataFrame([summary])
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="receipt_summary.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No summary fields found.")
+
+        st.subheader("🔍 Entity Table (Editable)")
+        entity_df = extract_entities(document)
+        if not entity_df.empty:
+            edited_df = st.data_editor(entity_df, num_rows="dynamic")
+
+            st.subheader("💬 Feedback Loop")
+            if st.button("Submit Corrections"):
+                corrected_entities = edited_df.to_dict(orient="records")
+                try:
+                    with open("corrected_entities.json", "w") as f:
+                        json.dump(corrected_entities, f, indent=2)
+                    st.success("✅ Corrections saved! You can use these for retraining later.")
+                except Exception as e:
+                    st.error(f"❌ Failed to save corrections: {e}")
+        else:
+            st.info("No entities found in the document.")
+    else:
+        st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
+
+
