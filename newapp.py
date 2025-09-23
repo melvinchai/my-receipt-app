@@ -57,19 +57,21 @@ def extract_entities(document):
             })
     return pd.DataFrame(entities)
 
-# ✅ Enhanced summary extractor with aliasing and fallback
+# Alias map
+FIELD_ALIASES = {
+    "purchase_date": "invoice_date",
+    "receipt_date": "invoice_date",
+    "date_of_receipt": "invoice_date",
+    "receipt_total": "invoice_total",
+    "total_amount": "invoice_total",
+    "amount_due": "invoice_total",
+    "grand_total": "invoice_total",
+    "final_amount": "invoice_total"
+}
+
+# Enhanced summary extractor
 def extract_summary(document):
     summary = {}
-    FIELD_ALIASES = {
-        "purchase_date": "invoice_date",
-        "receipt_date": "invoice_date",
-        "date_of_receipt": "invoice_date",
-        "receipt_total": "invoice_total",
-        "total_amount": "invoice_total",
-        "amount_due": "invoice_total",
-        "grand_total": "invoice_total",
-        "final_amount": "invoice_total"
-    }
     desired_fields = ["invoice_date", "brand_name", "invoice_total"]
     field_candidates = {field: [] for field in desired_fields}
 
@@ -144,6 +146,38 @@ if uploaded_file:
             )
         else:
             st.info("No entities found in the document.")
+
+        st.subheader("🧪 Debug: Alias Resolution Transparency")
+
+        if st.toggle("Show alias candidates for Invoice Date"):
+            invoice_date_candidates = []
+            for entity in document.entities:
+                key = FIELD_ALIASES.get(entity.type_, entity.type_)
+                if key == "invoice_date" and entity.mention_text.strip():
+                    invoice_date_candidates.append({
+                        "Alias": entity.type_,
+                        "Value": entity.mention_text,
+                        "Confidence": round(entity.confidence, 2)
+                    })
+            if invoice_date_candidates:
+                st.dataframe(pd.DataFrame(invoice_date_candidates))
+            else:
+                st.info("No candidates found for `invoice_date`.")
+
+        if st.toggle("Show alias candidates for Invoice Total"):
+            invoice_total_candidates = []
+            for entity in document.entities:
+                key = FIELD_ALIASES.get(entity.type_, entity.type_)
+                if key == "invoice_total" and entity.mention_text.strip():
+                    invoice_total_candidates.append({
+                        "Alias": entity.type_,
+                        "Value": entity.mention_text,
+                        "Confidence": round(entity.confidence, 2)
+                    })
+            if invoice_total_candidates:
+                st.dataframe(pd.DataFrame(invoice_total_candidates))
+            else:
+                st.info("No candidates found for `invoice_total`.")
 
         st.subheader("💬 Feedback Loop")
         feedback = st.text_area("Comment or correction", placeholder="Type your feedback here...")
