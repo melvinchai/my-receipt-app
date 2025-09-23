@@ -7,6 +7,8 @@ from PIL import Image
 import tempfile
 import fitz  # PyMuPDF for PDF rendering
 from google.oauth2 import service_account
+import smtplib
+from email.mime.text import MIMEText
 
 # Load credentials from Streamlit Secrets
 creds = service_account.Credentials.from_service_account_info(
@@ -27,11 +29,9 @@ def process_document(file_path, mime_type):
     try:
         client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
         client = documentai.DocumentProcessorServiceClient(
-            client_options=client_options,
-            credentials=creds
+            client_options=client_options, credentials=creds
         )
         name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
-
         with open(file_path, "rb") as f:
             document = documentai.RawDocument(content=f.read(), mime_type=mime_type)
             request = documentai.ProcessRequest(name=name, raw_document=document)
@@ -57,25 +57,36 @@ def extract_entities(document):
             })
     return pd.DataFrame(entities)
 
-# ✅ Updated summary extractor with aliasing and fixed order
+# ✅ Enhanced summary extractor with aliasing and conflict resolution
 def extract_summary(document):
     summary = {}
     FIELD_ALIASES = {
         "purchase_date": "invoice_date",
         "receipt_date": "invoice_date",
-        "date_of_receipt": "invoice_date"
+        "date_of_receipt": "invoice_date",
+        "receipt_total": "invoice_total",
+        "total_amount": "invoice_total",
+        "amount_due": "invoice_total",
+        "grand_total": "invoice_total",
+        "final_amount": "invoice_total"
     }
-
     desired_fields = ["invoice_date", "brand_name", "invoice_total"]
+    field_candidates = {field: [] for field in desired_fields}
 
     if document and document.entities:
         for entity in document.entities:
             key = FIELD_ALIASES.get(entity.type_, entity.type_)
-            if key in desired_fields:
-                summary[key] = entity.mention_text
+            if key in desired_fields and entity.mention_text.strip():
+                field_candidates[key].append((entity.mention_text, entity.confidence, entity.type_))
 
     for field in desired_fields:
-        summary.setdefault(field, "")
+        if field_candidates[field]:
+            best = max(field_candidates[field], key=lambda x: x[1])
+            summary[field] = best[0]
+            summary[f"{field}_source"] = best[2]
+        else:
+            summary[field] = ""
+            summary[f"{field}_source"] = "N/A"
 
     return summary
 
@@ -83,8 +94,6 @@ def extract_summary(document):
 uploaded_file = st.file_uploader("Upload a receipt (image or PDF)", type=["jpg", "jpeg", "png", "pdf"])
 if uploaded_file:
     mime_type = "application/pdf" if uploaded_file.type == "application/pdf" else "image/jpeg"
-
-    # Save uploaded file to temp path
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf" if mime_type == "application/pdf" else ".jpg") as tmp:
         tmp.write(uploaded_file.getbuffer())
         tmp_path = tmp.name
@@ -97,13 +106,11 @@ if uploaded_file:
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         else:
             img = Image.open(tmp_path)
-
         st.image(img, caption="Uploaded Receipt", use_container_width=True)
     except Exception as e:
         st.warning(f"⚠️ Could not display image: {e}")
 
     document = process_document(tmp_path, mime_type)
-
     if document:
         st.subheader("🧠 Extracted Text")
         st.text_area("Full Text", extract_text(document), height=300)
@@ -112,8 +119,7 @@ if uploaded_file:
         summary = extract_summary(document)
         if summary:
             for field in ["invoice_date", "brand_name", "invoice_total"]:
-                st.write(f"**{field.replace('_', ' ').title()}:** {summary[field]}")
-
+                st.write(f"**{field.replace('_', ' ').title()} (from `{summary[field + '_source']}`):** {summary[field]}")
             df = pd.DataFrame([summary])
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button(
@@ -125,21 +131,35 @@ if uploaded_file:
         else:
             st.info("No summary fields found.")
 
-        st.subheader("🔍 Entity Table (Editable)")
+        st.subheader("🔍 Entity Table (Read-Only)")
         entity_df = extract_entities(document)
         if not entity_df.empty:
-            edited_df = st.data_editor(entity_df, num_rows="dynamic")
-
-            st.subheader("💬 Feedback Loop")
-            if st.button("Submit Corrections"):
-                corrected_entities = edited_df.to_dict(orient="records")
-                try:
-                    with open("corrected_entities.json", "w") as f:
-                        json.dump(corrected_entities, f, indent=2)
-                    st.success("✅ Corrections saved! You can use these for retraining later.")
-                except Exception as e:
-                    st.error(f"❌ Failed to save corrections: {e}")
+            st.dataframe(entity_df)
+            entity_csv = entity_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download Entity Table CSV",
+                data=entity_csv,
+                file_name="entity_table.csv",
+                mime="text/csv"
+            )
         else:
             st.info("No entities found in the document.")
+
+        st.subheader("💬 Feedback Loop")
+        feedback = st.text_area("Leave a comment or correction here")
+        if st.button("Send Feedback"):
+            try:
+                msg = MIMEText(feedback)
+                msg["Subject"] = "Receipt Parser Feedback"
+                msg["From"] = "your-sender-email@gmail.com"
+                msg["To"] = "melvinchia8@gmail.com"
+
+                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                    server.login("your-sender-email@gmail.com", "your-app-password")
+                    server.send_message(msg)
+
+                st.success("✅ Feedback sent to Melvin!")
+            except Exception as e:
+                st.error(f"❌ Failed to send feedback: {e}")
     else:
         st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
