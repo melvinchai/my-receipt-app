@@ -14,6 +14,10 @@ from email.mime.text import MIMEText
 creds = service_account.Credentials.from_service_account_info(
     json.loads(st.secrets["google"]["credentials"])
 )
+# sender gmail and secrets
+sender_email = st.secrets["email"]["sender"]
+app_password = st.secrets["email"]["app_password"]
+server.login(sender_email, app_password)
 
 # Streamlit setup
 st.set_page_config(page_title="Receipt Parser", layout="wide")
