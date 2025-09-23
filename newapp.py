@@ -1,7 +1,6 @@
 #redeploy
 import streamlit as st
 from google.cloud import documentai_v1beta3 as documentai
-import json
 import pandas as pd
 from PIL import Image
 import tempfile
@@ -10,10 +9,19 @@ from google.oauth2 import service_account
 import smtplib
 from email.mime.text import MIMEText
 
-# Load credentials from secrets
-creds = service_account.Credentials.from_service_account_info(
-    json.loads(st.secrets["google"]["credentials"])
-)
+# Load credentials from individual secrets keys
+google_creds = {
+    "type": st.secrets["google"]["type"],
+    "project_id": st.secrets["google"]["project_id"],
+    "private_key_id": st.secrets["google"]["private_key_id"],
+    "private_key": st.secrets["google"]["private_key"],
+    "client_email": st.secrets["google"]["client_email"],
+    "auth_uri": st.secrets["google"]["auth_uri"],
+    "token_uri": st.secrets["google"]["token_uri"],
+    "auth_provider_x509_cert_url": st.secrets["google"]["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": st.secrets["google"]["client_x509_cert_url"]
+}
+creds = service_account.Credentials.from_service_account_info(google_creds)
 
 # Streamlit setup
 st.set_page_config(page_title="Receipt Parser", layout="wide")
@@ -191,7 +199,7 @@ if uploaded_file:
                 msg = MIMEText(feedback)
                 msg["Subject"] = "Receipt Parser Feedback"
                 msg["From"] = sender_email
-                msg["To"] = sender_email  # sending to yourself
+                msg["To"] = sender_email
 
                 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                     server.login(sender_email, app_password)
