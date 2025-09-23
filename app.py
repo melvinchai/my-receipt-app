@@ -1,3 +1,4 @@
+#redeploy
 import streamlit as st
 from google.cloud import documentai_v1beta3 as documentai
 import json
