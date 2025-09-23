@@ -2,3 +2,4 @@ streamlit
 google-cloud-documentai
 google-auth
 Pillow
+pymupdf
