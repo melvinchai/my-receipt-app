@@ -57,13 +57,21 @@ def extract_entities(document):
             })
     return pd.DataFrame(entities)
 
-# Extract summary fields
+# Extract summary fields with fallback logic
 def extract_summary(document):
     summary = {}
     if document and document.entities:
         for entity in document.entities:
-            if entity.type_ in ["merchant_name", "total_amount", "receipt_date", "category"]:
+            if entity.type_ in [
+                "merchant_name", "vendor", "company_name",
+                "total_amount", "amount_paid", "amount",
+                "receipt_date", "purchase_date", "date",
+                "category", "date_of_receipt", "brand_name", "receipt_subtotal"
+            ]:
                 summary[entity.type_] = entity.mention_text
+        # Fallback: use receipt_subtotal if total_amount is missing
+        if "total_amount" not in summary and "receipt_subtotal" in summary:
+            summary["total_amount"] = summary["receipt_subtotal"]
     return summary
 
 # Upload and process receipt
@@ -110,23 +118,3 @@ if uploaded_file:
                 mime="text/csv"
             )
         else:
-            st.info("No summary fields found.")
-
-        st.subheader("🔍 Entity Table (Editable)")
-        entity_df = extract_entities(document)
-        if not entity_df.empty:
-            edited_df = st.data_editor(entity_df, num_rows="dynamic")
-
-            st.subheader("💬 Feedback Loop")
-            if st.button("Submit Corrections"):
-                corrected_entities = edited_df.to_dict(orient="records")
-                try:
-                    with open("corrected_entities.json", "w") as f:
-                        json.dump(corrected_entities, f, indent=2)
-                    st.success("✅ Corrections saved! You can use these for retraining later.")
-                except Exception as e:
-                    st.error(f"❌ Failed to save corrections: {e}")
-        else:
-            st.info("No entities found in the document.")
-    else:
-        st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
