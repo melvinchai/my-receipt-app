@@ -1,18 +1,16 @@
 import streamlit as st
 from google.cloud import documentai_v1beta3 as documentai
-import os
 import json
 import pandas as pd
 from PIL import Image
 import tempfile
 import fitz  # PyMuPDF for PDF rendering
-import json
 from google.oauth2 import service_account
 
+# Load credentials from Streamlit Secrets
 creds = service_account.Credentials.from_service_account_info(
     json.loads(st.secrets["google"]["credentials"])
 )
-client = documentai.DocumentProcessorServiceClient(credentials=creds)
 
 # Set up Streamlit page
 st.set_page_config(page_title="Receipt Parser", layout="wide")
@@ -22,17 +20,15 @@ st.title("📄 Malaysian Receipt Parser with Document AI")
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "malaysia-receipt-saas-3cb987586941.json"
 
 # Document AI client
 def process_document(file_path, mime_type):
     try:
         client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
-                client = documentai.DocumentProcessorServiceClient(
-                     client_options=client_options,
-                     credentials=creds
-                 )
-
+        client = documentai.DocumentProcessorServiceClient(
+            client_options=client_options,
+            credentials=creds
+        )
         name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
 
         with open(file_path, "rb") as f:
@@ -133,5 +129,3 @@ if uploaded_file:
             st.info("No entities found in the document.")
     else:
         st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
-
-
