@@ -6,20 +6,15 @@ from PIL import Image
 import tempfile
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
+import json
 
-# Load credentials from individual secrets keys
-google_creds = {
-    "type": st.secrets["google"]["type"],
-    "project_id": st.secrets["google"]["project_id"],
-    "private_key_id": st.secrets["google"]["private_key_id"],
-    "private_key": st.secrets["google"]["private_key"],
-    "client_email": st.secrets["google"]["client_email"],
-    "auth_uri": st.secrets["google"]["auth_uri"],
-    "token_uri": st.secrets["google"]["token_uri"],
-    "auth_provider_x509_cert_url": st.secrets["google"]["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": st.secrets["google"]["client_x509_cert_url"]
-}
-creds = service_account.Credentials.from_service_account_info(google_creds)
+# Load credentials from full JSON string
+try:
+    creds_json = json.loads(st.secrets["google"]["credentials"])
+    creds = service_account.Credentials.from_service_account_info(creds_json)
+except Exception as e:
+    st.error(f"❌ Failed to load credentials: {e}")
+    st.stop()
 
 # Streamlit setup
 st.set_page_config(page_title="Receipt Parser", layout="wide")
