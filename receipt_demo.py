@@ -7,7 +7,7 @@ import tempfile
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
 import json
-from io import BytesIO
+import re
 
 # Load credentials from full JSON string
 try:
@@ -18,23 +18,13 @@ except Exception as e:
     st.stop()
 
 # Streamlit setup
-st.set_page_config(page_title="Receipt Parser Demo", layout="wide")
-st.title("📄 Expense Report Demo with Document AI")
+st.set_page_config(page_title="Receipt Parser", layout="wide")
+st.title("📄 v1 Malaysian Receipt Parser with Document AI")
 
 # GCP config
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
-
-# Sample expense records (6 entries)
-sample_expenses = [
-    {"Date": "2025-09-20", "Vendor": "Grab", "Description": "Client transport", "Category": "Travel", "Amount (MYR)": 45.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Meeting"},
-    {"Date": "2025-09-19", "Vendor": "Starbucks", "Description": "Coffee", "Category": "Meals", "Amount (MYR)": 18.50, "Payment Method": "Cash", "Tax Code": "Non-tax", "Notes": "Partner catch-up"},
-    {"Date": "2025-09-18", "Vendor": "Shopee", "Description": "Printer ink", "Category": "Office Supplies", "Amount (MYR)": 120.00, "Payment Method": "Bank Transfer", "Tax Code": "SST", "Notes": "Restock"},
-    {"Date": "2025-09-17", "Vendor": "Petronas", "Description": "Fuel", "Category": "Fuel", "Amount (MYR)": 85.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Delivery"},
-    {"Date": "2025-09-16", "Vendor": "Zoom", "Description": "Subscription", "Category": "Software Subscriptions", "Amount (MYR)": 60.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Monthly"},
-    {"Date": "2025-09-15", "Vendor": "Udemy", "Description": "Course", "Category": "Training", "Amount (MYR)": 150.00, "Payment Method": "Credit Card", "Tax Code": "Non-tax", "Notes": "HR training"}
-]
 
 # Document AI client
 def process_document(file_path, mime_type):
@@ -53,6 +43,22 @@ def process_document(file_path, mime_type):
         st.error(f"❌ Failed to process document: {e}")
         return None
 
+# Extract full text
+def extract_text(document):
+    return document.text if document and document.text else "No text found."
+
+# Extract entities
+def extract_entities(document):
+    entities = []
+    if document and document.entities:
+        for entity in document.entities:
+            entities.append({
+                "Field": entity.type_,
+                "Value": entity.mention_text,
+                "Confidence": round(entity.confidence, 2)
+            })
+    return pd.DataFrame(entities)
+
 # Alias map
 FIELD_ALIASES = {
     "purchase_date": "invoice_date",
@@ -64,13 +70,48 @@ FIELD_ALIASES = {
     "total_amount": "invoice_total",
     "amount_due": "invoice_total",
     "grand_total": "invoice_total",
-    "final_amount": "invoice_total"
+    "final_amount": "invoice_total",
+    "merchant_name": "brand_name",
+    "store_name": "brand_name",
+    "retailer": "brand_name",
+    "credit_card_number": "credit_card",
+    "card_number": "credit_card",
+    "payment_card": "credit_card",
+    "payment_method": "payment_type",
+    "method_of_payment": "payment_type",
+    "card_type": "payment_type",
+    "payment_type": "payment_type",
+    "receipt_type": "category",
+    "transaction_category": "category",
+    "expense_type": "category"
 }
 
-# Summary extractor
+# Fallback logic from raw text
+def fallback_from_text(text, field):
+    if not text:
+        return ""
+
+    if field == "brand_name":
+        lines = text.split("\n")
+        for line in lines[:5]:
+            if re.search(r"(sdn bhd|berhad|enterprise|store|cafe|restaurant|mart)", line, re.IGNORECASE):
+                return line.strip()
+        return lines[0].strip()
+
+    if field == "payment_type":
+        match = re.search(r"(visa|mastercard|grabpay|touch[ -]?n[ -]?go|cash|credit card|debit card)", text, re.IGNORECASE)
+        return match.group(0).title() if match else ""
+
+    if field == "category":
+        match = re.search(r"(entertainment|meals|fuel|transport|training|software|subscription|office supplies)", text, re.IGNORECASE)
+        return match.group(0).title() if match else ""
+
+    return ""
+
+# Enhanced summary extractor with fallback
 def extract_summary(document):
     summary = {}
-    desired_fields = ["invoice_date", "brand_name", "invoice_total"]
+    desired_fields = ["invoice_date", "brand_name", "invoice_total", "credit_card", "payment_type", "category"]
     field_candidates = {field: [] for field in desired_fields}
 
     if document and document.entities:
@@ -80,12 +121,17 @@ def extract_summary(document):
             if key in desired_fields and entity.mention_text.strip():
                 field_candidates[key].append((entity.mention_text, entity.confidence, entity.type_))
 
+    full_text = document.text if document and document.text else ""
+
     for field in desired_fields:
         if field_candidates[field]:
             best = max(field_candidates[field], key=lambda x: x[1])
             summary[field] = best[0]
+            summary[f"{field}_source"] = best[2]
         else:
-            summary[field] = ""
+            fallback = fallback_from_text(full_text, field)
+            summary[field] = fallback
+            summary[f"{field}_source"] = "fallback_text" if fallback else "N/A"
 
     return summary
 
@@ -111,31 +157,55 @@ if uploaded_file:
 
     document = process_document(tmp_path, mime_type)
     if document:
-        parsed = extract_summary(document)
-        new_record = {
-            "Date": parsed.get("invoice_date", ""),
-            "Vendor": parsed.get("brand_name", ""),
-            "Description": "Parsed from receipt",
-            "Category": "Uncategorized",
-            "Amount (MYR)": float(parsed.get("invoice_total", "0") or 0),
-            "Payment Method": "Unknown",
-            "Tax Code": "Unknown",
-            "Notes": "Auto-parsed"
-        }
+        st.subheader("🧠 Extracted Text")
+        st.text_area("Full Text", extract_text(document), height=300)
 
-        full_report = sample_expenses + [new_record]
-        df = pd.DataFrame(full_report)
+        st.subheader("📋 Summary Box: Fields to be downloaded for Excel")
+        summary = extract_summary(document)
+        if summary:
+            for field in ["invoice_date", "brand_name", "invoice_total", "credit_card", "payment_type", "category"]:
+                st.write(f"**{field.replace('_', ' ').title()} (from `{summary[field + '_source']}`):** {summary[field]}")
+            df = pd.DataFrame([summary])
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="receipt_summary.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No summary fields found.")
 
-        st.subheader("📊 Full Expense Report")
-        st.dataframe(df, use_container_width=True)
+        st.subheader("🔍 Entity Table (Read-Only)")
+        entity_df = extract_entities(document)
+        if not entity_df.empty:
+            st.dataframe(entity_df)
+            entity_csv = entity_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download Entity Table CSV",
+                data=entity_csv,
+                file_name="entity_table.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No entities found in the document.")
 
-        # Download buttons
-        csv_buffer = BytesIO()
-        df.to_csv(csv_buffer, index=False)
-        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv", mime="text/csv")
-
-        json_buffer = BytesIO()
-        json_buffer.write(json.dumps(full_report, indent=2).encode())
-        st.download_button("📥 Download as JSON", data=json_buffer.getvalue(), file_name="expense_report.json", mime="application/json")
+        st.subheader("🧪 Debug: Alias Resolution Transparency")
+        for alias_field in ["invoice_date", "invoice_total", "brand_name", "credit_card", "payment_type", "category"]:
+            if st.toggle(f"Show alias candidates for {alias_field.replace('_', ' ').title()}"):
+                candidates = []
+                for entity in document.entities:
+                    normalized_type = entity.type_.replace("-", "_").lower()
+                    key = FIELD_ALIASES.get(normalized_type, normalized_type)
+                    if key == alias_field and entity.mention_text.strip():
+                        candidates.append({
+                            "Alias": entity.type_,
+                            "Value": entity.mention_text,
+                            "Confidence": round(entity.confidence, 2)
+                        })
+                if candidates:
+                    st.dataframe(pd.DataFrame(candidates))
+                else:
+                    st.info(f"No candidates found for `{alias_field}`.")
     else:
         st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
