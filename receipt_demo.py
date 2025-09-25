@@ -7,7 +7,6 @@ import tempfile
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
 import json
-from io import BytesIO
 
 # Load credentials from full JSON string
 try:
@@ -18,23 +17,13 @@ except Exception as e:
     st.stop()
 
 # Streamlit setup
-st.set_page_config(page_title="Receipt Parser Demo", layout="wide")
-st.title("📄 Expense Report Demo with Document AI")
+st.set_page_config(page_title="Receipt Parser", layout="wide")
+st.title("📄 v1 Malaysian Receipt Parser with Document AI")
 
 # GCP config
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
-
-# Sample expense records (6 entries)
-sample_expenses = [
-    {"Date": "2025-09-20", "Vendor": "Grab", "Description": "Client transport", "Category": "Travel", "Amount (MYR)": 45.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Meeting"},
-    {"Date": "2025-09-19", "Vendor": "Starbucks", "Description": "Coffee", "Category": "Meals", "Amount (MYR)": 18.50, "Payment Method": "Cash", "Tax Code": "Non-tax", "Notes": "Partner catch-up"},
-    {"Date": "2025-09-18", "Vendor": "Shopee", "Description": "Printer ink", "Category": "Office Supplies", "Amount (MYR)": 120.00, "Payment Method": "Bank Transfer", "Tax Code": "SST", "Notes": "Restock"},
-    {"Date": "2025-09-17", "Vendor": "Petronas", "Description": "Fuel", "Category": "Fuel", "Amount (MYR)": 85.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Delivery"},
-    {"Date": "2025-09-16", "Vendor": "Zoom", "Description": "Subscription", "Category": "Software Subscriptions", "Amount (MYR)": 60.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Monthly"},
-    {"Date": "2025-09-15", "Vendor": "Udemy", "Description": "Course", "Category": "Training", "Amount (MYR)": 150.00, "Payment Method": "Credit Card", "Tax Code": "Non-tax", "Notes": "HR training"}
-]
 
 # Document AI client
 def process_document(file_path, mime_type):
@@ -53,6 +42,22 @@ def process_document(file_path, mime_type):
         st.error(f"❌ Failed to process document: {e}")
         return None
 
+# Extract full text
+def extract_text(document):
+    return document.text if document and document.text else "No text found."
+
+# Extract entities
+def extract_entities(document):
+    entities = []
+    if document and document.entities:
+        for entity in document.entities:
+            entities.append({
+                "Field": entity.type_,
+                "Value": entity.mention_text,
+                "Confidence": round(entity.confidence, 2)
+            })
+    return pd.DataFrame(entities)
+
 # Alias map
 FIELD_ALIASES = {
     "purchase_date": "invoice_date",
@@ -64,13 +69,19 @@ FIELD_ALIASES = {
     "total_amount": "invoice_total",
     "amount_due": "invoice_total",
     "grand_total": "invoice_total",
-    "final_amount": "invoice_total"
+    "final_amount": "invoice_total",
+    "merchant_name": "brand_name",
+    "store_name": "brand_name",
+    "retailer": "brand_name",
+    "credit_card_number": "credit_card",
+    "card_number": "credit_card",
+    "payment_card": "credit_card"
 }
 
-# Summary extractor
+# Enhanced summary extractor with normalization
 def extract_summary(document):
     summary = {}
-    desired_fields = ["invoice_date", "brand_name", "invoice_total"]
+    desired_fields = ["invoice_date", "brand_name", "invoice_total", "credit_card"]
     field_candidates = {field: [] for field in desired_fields}
 
     if document and document.entities:
@@ -84,8 +95,10 @@ def extract_summary(document):
         if field_candidates[field]:
             best = max(field_candidates[field], key=lambda x: x[1])
             summary[field] = best[0]
+            summary[f"{field}_source"] = best[2]
         else:
             summary[field] = ""
+            summary[f"{field}_source"] = "N/A"
 
     return summary
 
@@ -111,31 +124,55 @@ if uploaded_file:
 
     document = process_document(tmp_path, mime_type)
     if document:
-        parsed = extract_summary(document)
-        new_record = {
-            "Date": parsed.get("invoice_date", ""),
-            "Vendor": parsed.get("brand_name", ""),
-            "Description": "Parsed from receipt",
-            "Category": "Uncategorized",
-            "Amount (MYR)": float(parsed.get("invoice_total", "0") or 0),
-            "Payment Method": "Unknown",
-            "Tax Code": "Unknown",
-            "Notes": "Auto-parsed"
-        }
+        st.subheader("🧠 Extracted Text")
+        st.text_area("Full Text", extract_text(document), height=300)
 
-        full_report = sample_expenses + [new_record]
-        df = pd.DataFrame(full_report)
+        st.subheader("📋 Summary Box: Fields to be downloaded for Excel")
+        summary = extract_summary(document)
+        if summary:
+            for field in ["invoice_date", "brand_name", "invoice_total", "credit_card"]:
+                st.write(f"**{field.replace('_', ' ').title()} (from `{summary[field + '_source']}`):** {summary[field]}")
+            df = pd.DataFrame([summary])
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="receipt_summary.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No summary fields found.")
 
-        st.subheader("📊 Full Expense Report")
-        st.dataframe(df, use_container_width=True)
+        st.subheader("🔍 Entity Table (Read-Only)")
+        entity_df = extract_entities(document)
+        if not entity_df.empty:
+            st.dataframe(entity_df)
+            entity_csv = entity_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download Entity Table CSV",
+                data=entity_csv,
+                file_name="entity_table.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No entities found in the document.")
 
-        # Download buttons
-        csv_buffer = BytesIO()
-        df.to_csv(csv_buffer, index=False)
-        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv", mime="text/csv")
-
-        json_buffer = BytesIO()
-        json_buffer.write(json.dumps(full_report, indent=2).encode())
-        st.download_button("📥 Download as JSON", data=json_buffer.getvalue(), file_name="expense_report.json", mime="application/json")
+        st.subheader("🧪 Debug: Alias Resolution Transparency")
+        for alias_field in ["invoice_date", "invoice_total", "brand_name", "credit_card"]:
+            if st.toggle(f"Show alias candidates for {alias_field.replace('_', ' ').title()}"):
+                candidates = []
+                for entity in document.entities:
+                    normalized_type = entity.type_.replace("-", "_").lower()
+                    key = FIELD_ALIASES.get(normalized_type, normalized_type)
+                    if key == alias_field and entity.mention_text.strip():
+                        candidates.append({
+                            "Alias": entity.type_,
+                            "Value": entity.mention_text,
+                            "Confidence": round(entity.confidence, 2)
+                        })
+                if candidates:
+                    st.dataframe(pd.DataFrame(candidates))
+                else:
+                    st.info(f"No candidates found for `{alias_field}`.")
     else:
         st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
