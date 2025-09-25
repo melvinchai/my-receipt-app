@@ -1,4 +1,4 @@
-#receipt_demo_v2.py
+#redeploy
 import streamlit as st
 from google.cloud import documentai_v1beta3 as documentai
 import pandas as pd
@@ -7,6 +7,7 @@ import tempfile
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
 import json
+from io import BytesIO
 import re
 
 # Load credentials from full JSON string
@@ -18,13 +19,40 @@ except Exception as e:
     st.stop()
 
 # Streamlit setup
-st.set_page_config(page_title="Receipt Parser v2", layout="wide")
-st.title("📄 Receipt Parser v2 with Fallback Logic")
+st.set_page_config(page_title="Receipt Parser Demo", layout="wide")
+st.title("📄 Expense Report Demo with Document AI")
 
 # GCP config
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
+
+# Sample expense records (6 entries)
+sample_expenses = [
+    {"Date": "2025-09-20", "Vendor": "Grab", "Description": "Client transport", "Category": "Travel", "Amount (MYR)": 45.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Meeting"},
+    {"Date": "2025-09-19", "Vendor": "Starbucks", "Description": "Coffee", "Category": "Meals", "Amount (MYR)": 18.50, "Payment Method": "Cash", "Tax Code": "Non-tax", "Notes": "Partner catch-up"},
+    {"Date": "2025-09-18", "Vendor": "Shopee", "Description": "Printer ink", "Category": "Office Supplies", "Amount (MYR)": 120.00, "Payment Method": "Bank Transfer", "Tax Code": "SST", "Notes": "Restock"},
+    {"Date": "2025-09-17", "Vendor": "Petronas", "Description": "Fuel", "Category": "Fuel", "Amount (MYR)": 85.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Delivery"},
+    {"Date": "2025-09-16", "Vendor": "Zoom", "Description": "Subscription", "Category": "Software Subscriptions", "Amount (MYR)": 60.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Monthly"},
+    {"Date": "2025-09-15", "Vendor": "Udemy", "Description": "Course", "Category": "Training", "Amount (MYR)": 150.00, "Payment Method": "Credit Card", "Tax Code": "Non-tax", "Notes": "HR training"}
+]
+
+# Document AI client
+def process_document(file_path, mime_type):
+    try:
+        client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
+        client = documentai.DocumentProcessorServiceClient(
+            client_options=client_options, credentials=creds
+        )
+        name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
+        with open(file_path, "rb") as f:
+            document = documentai.RawDocument(content=f.read(), mime_type=mime_type)
+            request = documentai.ProcessRequest(name=name, raw_document=document)
+            result = client.process_document(request=request)
+            return result.document
+    except Exception as e:
+        st.error(f"❌ Failed to process document: {e}")
+        return None
 
 # Alias map
 FIELD_ALIASES = {
@@ -41,9 +69,6 @@ FIELD_ALIASES = {
     "merchant_name": "brand_name",
     "store_name": "brand_name",
     "retailer": "brand_name",
-    "credit_card_number": "credit_card",
-    "card_number": "credit_card",
-    "payment_card": "credit_card",
     "payment_method": "payment_type",
     "method_of_payment": "payment_type",
     "card_type": "payment_type",
@@ -88,43 +113,10 @@ def fallback_from_text(text, field):
 
     return ""
 
-# Document AI client
-def process_document(file_path, mime_type):
-    try:
-        client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
-        client = documentai.DocumentProcessorServiceClient(
-            client_options=client_options, credentials=creds
-        )
-        name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
-        with open(file_path, "rb") as f:
-            document = documentai.RawDocument(content=f.read(), mime_type=mime_type)
-            request = documentai.ProcessRequest(name=name, raw_document=document)
-            result = client.process_document(request=request)
-            return result.document
-    except Exception as e:
-        st.error(f"❌ Failed to process document: {e}")
-        return None
-
-# Extract full text
-def extract_text(document):
-    return document.text if document and document.text else "No text found."
-
-# Extract entities
-def extract_entities(document):
-    entities = []
-    if document and document.entities:
-        for entity in document.entities:
-            entities.append({
-                "Field": entity.type_,
-                "Value": entity.mention_text,
-                "Confidence": round(entity.confidence, 2)
-            })
-    return pd.DataFrame(entities)
-
 # Summary extractor with fallback
 def extract_summary(document):
     summary = {}
-    desired_fields = ["invoice_date", "brand_name", "invoice_total", "credit_card", "payment_type", "category", "tax_code"]
+    desired_fields = ["invoice_date", "brand_name", "invoice_total", "payment_type", "category", "tax_code"]
     field_candidates = {field: [] for field in desired_fields}
 
     if document and document.entities:
@@ -140,11 +132,8 @@ def extract_summary(document):
         if field_candidates[field]:
             best = max(field_candidates[field], key=lambda x: x[1])
             summary[field] = best[0]
-            summary[f"{field}_source"] = best[2]
         else:
-            fallback = fallback_from_text(full_text, field)
-            summary[field] = fallback
-            summary[f"{field}_source"] = "fallback_text" if fallback else "N/A"
+            summary[field] = fallback_from_text(full_text, field)
 
     return summary
 
@@ -170,27 +159,29 @@ if uploaded_file:
 
     document = process_document(tmp_path, mime_type)
     if document:
-        st.subheader("🧠 Extracted Text")
-        st.text_area("Full Text", extract_text(document), height=300)
+        parsed = extract_summary(document)
+        new_record = {
+            "Date": parsed.get("invoice_date", ""),
+            "Vendor": parsed.get("brand_name", ""),
+            "Description": "Parsed from receipt",
+            "Category": parsed.get("category", "Uncategorized"),
+            "Amount (MYR)": float(parsed.get("invoice_total", "0") or 0),
+            "Payment Method": parsed.get("payment_type", "Unknown"),
+            "Tax Code": parsed.get("tax_code", "Unknown"),
+            "Notes": "Auto-parsed"
+        }
 
-        st.subheader("📋 Summary Box")
-        summary = extract_summary(document)
-        if summary:
-            for field in ["invoice_date", "brand_name", "invoice_total", "credit_card", "payment_type", "category", "tax_code"]:
-                st.write(f"**{field.replace('_', ' ').title()} (from `{summary[field + '_source']}`):** {summary[field]}")
-            df = pd.DataFrame([summary])
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Download Summary CSV", data=csv, file_name="receipt_summary.csv", mime="text/csv")
-        else:
-            st.info("No summary fields found.")
+        full_report = sample_expenses + [new_record]
+        df = pd.DataFrame(full_report)
 
-        st.subheader("🔍 Entity Table")
-        entity_df = extract_entities(document)
-        if not entity_df.empty:
-            st.dataframe(entity_df)
-            entity_csv = entity_df.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Download Entity Table CSV", data=entity_csv, file_name="entity_table.csv", mime="text/csv")
-        else:
-            st.info("No entities found.")
-    else:
-        st.warning("⚠️ No document returned. Please check your processor ID or credentials.")
+        st.subheader("📊 Full Expense Report")
+        st.dataframe(df, use_container_width=True)
+
+        # Download buttons
+        csv_buffer = BytesIO()
+        df.to_csv(csv_buffer, index=False)
+        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv", mime="text/csv")
+
+        json_buffer = BytesIO()
+        json_buffer.write(json.dumps(full_report, indent=2).encode())
+        st.download_button("📥 Download as JSON", data=json_buffer.get
