@@ -1,4 +1,3 @@
-#redeploy
 import streamlit as st
 from google.cloud import documentai_v1beta3 as documentai
 import pandas as pd
@@ -10,7 +9,7 @@ import json
 from io import BytesIO
 import re
 
-# Load credentials from full JSON string
+# Load credentials
 try:
     creds_json = json.loads(st.secrets["google"]["credentials"])
     creds = service_account.Credentials.from_service_account_info(creds_json)
@@ -27,7 +26,7 @@ PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
 
-# Sample expense records
+# Sample records
 sample_expenses = [
     {"Date": "2025-09-20", "Vendor": "Grab", "Description": "Client transport", "Category": "Travel", "Amount (MYR)": 45.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Meeting"},
     {"Date": "2025-09-19", "Vendor": "Starbucks", "Description": "Coffee", "Category": "Meals", "Amount (MYR)": 18.50, "Payment Method": "Cash", "Tax Code": "Non-tax", "Notes": "Partner catch-up"},
@@ -37,34 +36,20 @@ sample_expenses = [
     {"Date": "2025-09-15", "Vendor": "Udemy", "Description": "Course", "Category": "Training", "Amount (MYR)": 150.00, "Payment Method": "Credit Card", "Tax Code": "Non-tax", "Notes": "HR training"}
 ]
 
-# Alias map
+# Aliases
 FIELD_ALIASES = {
-    "purchase_date": "invoice_date",
-    "receipt_date": "invoice_date",
-    "date_of_receipt": "invoice_date",
-    "transaction_date": "invoice_date",
-    "date": "invoice_date",
-    "receipt_total": "invoice_total",
-    "total_amount": "invoice_total",
-    "amount_due": "invoice_total",
-    "grand_total": "invoice_total",
-    "final_amount": "invoice_total",
-    "merchant_name": "brand_name",
-    "store_name": "brand_name",
-    "retailer": "brand_name",
-    "payment_method": "payment_type",
-    "method_of_payment": "payment_type",
-    "card_type": "payment_type",
+    "purchase_date": "invoice_date", "receipt_date": "invoice_date", "date_of_receipt": "invoice_date",
+    "transaction_date": "invoice_date", "date": "invoice_date",
+    "receipt_total": "invoice_total", "total_amount": "invoice_total", "amount_due": "invoice_total",
+    "grand_total": "invoice_total", "final_amount": "invoice_total",
+    "merchant_name": "brand_name", "store_name": "brand_name", "retailer": "brand_name",
+    "payment_method": "payment_type", "method_of_payment": "payment_type", "card_type": "payment_type",
     "payment_type": "payment_type",
-    "receipt_type": "category",
-    "transaction_category": "category",
-    "expense_type": "category",
-    "tax": "tax_code",
-    "tax_rate": "tax_code",
-    "vat": "tax_code"
+    "receipt_type": "category", "transaction_category": "category", "expense_type": "category",
+    "tax": "tax_code", "tax_rate": "tax_code", "vat": "tax_code"
 }
 
-# Fallback logic from raw text
+# Fallback logic
 def fallback_from_text(text, field):
     if not text:
         return ""
@@ -92,7 +77,7 @@ def fallback_from_text(text, field):
         return "Non-tax"
     return ""
 
-# Summary extractor with fallback
+# Summary extractor
 def extract_summary(document):
     summary = {}
     desired_fields = ["invoice_date", "brand_name", "invoice_total", "payment_type", "category", "tax_code"]
@@ -116,9 +101,7 @@ def extract_summary(document):
 def process_document(file_path, mime_type):
     try:
         client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
-        client = documentai.DocumentProcessorServiceClient(
-            client_options=client_options, credentials=creds
-        )
+        client = documentai.DocumentProcessorServiceClient(client_options=client_options, credentials=creds)
         name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
         with open(file_path, "rb") as f:
             document = documentai.RawDocument(content=f.read(), mime_type=mime_type)
@@ -146,7 +129,6 @@ if uploaded_file:
         else:
             img = Image.open(tmp_path)
 
-        # Rotate if horizontal
         if img.width > img.height:
             img = img.rotate(270, expand=True)
 
@@ -174,7 +156,10 @@ if uploaded_file:
         st.subheader("📊 Full Expense Report")
         st.dataframe(df, use_container_width=True)
 
-        # Download buttons
         csv_buffer = BytesIO()
         df.to_csv(csv_buffer, index=False)
-        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv
+        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv", mime="text/csv")
+
+        json_buffer = BytesIO()
+        json_buffer.write(json.dumps(full_report, indent=2).encode())
+        st.download_button("📥 Download as JSON", data=json_buffer.getvalue(), file
