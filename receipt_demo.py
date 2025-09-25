@@ -37,23 +37,6 @@ sample_expenses = [
     {"Date": "2025-09-15", "Vendor": "Udemy", "Description": "Course", "Category": "Training", "Amount (MYR)": 150.00, "Payment Method": "Credit Card", "Tax Code": "Non-tax", "Notes": "HR training"}
 ]
 
-# Document AI client
-def process_document(file_path, mime_type):
-    try:
-        client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
-        client = documentai.DocumentProcessorServiceClient(
-            client_options=client_options, credentials=creds
-        )
-        name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
-        with open(file_path, "rb") as f:
-            document = documentai.RawDocument(content=f.read(), mime_type=mime_type)
-            request = documentai.ProcessRequest(name=name, raw_document=document)
-            result = client.process_document(request=request)
-            return result.document
-    except Exception as e:
-        st.error(f"❌ Failed to process document: {e}")
-        return None
-
 # Alias map
 FIELD_ALIASES = {
     "purchase_date": "invoice_date",
@@ -100,8 +83,9 @@ def fallback_from_text(text, field):
             return "E-Wallet"
         return ""
     if field == "category":
-        match = re.search(r"(entertainment|meals|fuel|transport|training|software|subscription|office supplies)", text, re.IGNORECASE)
-        return match.group(0).title() if match else ""
+        if re.search(r"(entertainment|meals|fuel|transport|training|software|subscription|office supplies|coffee|kopi|restaurant|food|cafe)", text, re.IGNORECASE):
+            return "Meals"
+        return ""
     if field == "tax_code":
         if re.search(r"6[%]|sst", text, re.IGNORECASE):
             return "SST"
@@ -127,6 +111,23 @@ def extract_summary(document):
         else:
             summary[field] = fallback_from_text(full_text, field)
     return summary
+
+# Document AI client
+def process_document(file_path, mime_type):
+    try:
+        client_options = {"api_endpoint": f"{LOCATION}-documentai.googleapis.com"}
+        client = documentai.DocumentProcessorServiceClient(
+            client_options=client_options, credentials=creds
+        )
+        name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
+        with open(file_path, "rb") as f:
+            document = documentai.RawDocument(content=f.read(), mime_type=mime_type)
+            request = documentai.ProcessRequest(name=name, raw_document=document)
+            result = client.process_document(request=request)
+            return result.document
+    except Exception as e:
+        st.error(f"❌ Failed to process document: {e}")
+        return None
 
 # Upload and process
 uploaded_file = st.file_uploader("Upload a receipt (image or PDF)", type=["jpg", "jpeg", "png", "pdf"])
@@ -179,5 +180,4 @@ if uploaded_file:
         st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv", mime="text/csv")
 
         json_buffer = BytesIO()
-        json_buffer.write(json.dumps(full_report, indent=2).encode())
-        st
+        json_buffer
