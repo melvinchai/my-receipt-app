@@ -27,7 +27,7 @@ PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "8fb44aee4495bb0f"
 
-# Sample expense records (6 entries)
+# Sample expense records
 sample_expenses = [
     {"Date": "2025-09-20", "Vendor": "Grab", "Description": "Client transport", "Category": "Travel", "Amount (MYR)": 45.00, "Payment Method": "Credit Card", "Tax Code": "SST", "Notes": "Meeting"},
     {"Date": "2025-09-19", "Vendor": "Starbucks", "Description": "Coffee", "Category": "Meals", "Amount (MYR)": 18.50, "Payment Method": "Cash", "Tax Code": "Non-tax", "Notes": "Partner catch-up"},
@@ -85,14 +85,12 @@ FIELD_ALIASES = {
 def fallback_from_text(text, field):
     if not text:
         return ""
-
     if field == "brand_name":
         lines = text.split("\n")
         for line in lines[:5]:
             if re.search(r"(sdn bhd|berhad|enterprise|store|cafe|restaurant|mart)", line, re.IGNORECASE):
                 return line.strip()
         return lines[0].strip()
-
     if field == "payment_type":
         if re.search(r"\bvisa\b|\bmastercard\b|\bcredit card\b", text, re.IGNORECASE):
             return "Credit Card"
@@ -101,16 +99,13 @@ def fallback_from_text(text, field):
         if re.search(r"\bgrabpay\b|\btouch[ -]?n[ -]?go\b", text, re.IGNORECASE):
             return "E-Wallet"
         return ""
-
     if field == "category":
         match = re.search(r"(entertainment|meals|fuel|transport|training|software|subscription|office supplies)", text, re.IGNORECASE)
         return match.group(0).title() if match else ""
-
     if field == "tax_code":
         if re.search(r"6[%]|sst", text, re.IGNORECASE):
             return "SST"
         return "Non-tax"
-
     return ""
 
 # Summary extractor with fallback
@@ -118,23 +113,19 @@ def extract_summary(document):
     summary = {}
     desired_fields = ["invoice_date", "brand_name", "invoice_total", "payment_type", "category", "tax_code"]
     field_candidates = {field: [] for field in desired_fields}
-
     if document and document.entities:
         for entity in document.entities:
             normalized_type = entity.type_.replace("-", "_").lower()
             key = FIELD_ALIASES.get(normalized_type, normalized_type)
             if key in desired_fields and entity.mention_text.strip():
                 field_candidates[key].append((entity.mention_text, entity.confidence, entity.type_))
-
     full_text = document.text if document and document.text else ""
-
     for field in desired_fields:
         if field_candidates[field]:
             best = max(field_candidates[field], key=lambda x: x[1])
             summary[field] = best[0]
         else:
             summary[field] = fallback_from_text(full_text, field)
-
     return summary
 
 # Upload and process
@@ -153,6 +144,11 @@ if uploaded_file:
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         else:
             img = Image.open(tmp_path)
+
+        # Rotate if horizontal
+        if img.width > img.height:
+            img = img.rotate(270, expand=True)
+
         st.image(img, caption="Uploaded Receipt", use_container_width=True)
     except Exception as e:
         st.warning(f"⚠️ Could not display image: {e}")
@@ -184,4 +180,4 @@ if uploaded_file:
 
         json_buffer = BytesIO()
         json_buffer.write(json.dumps(full_report, indent=2).encode())
-        st.download_button("📥 Download as JSON", data=json_buffer.get
+        st
