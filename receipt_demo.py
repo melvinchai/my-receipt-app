@@ -162,4 +162,3 @@ if uploaded_file:
 
         json_buffer = BytesIO()
         json_buffer.write(json.dumps(full_report, indent=2).encode())
-        st.download_button("📥 Download as JSON", data=json_buffer.getvalue(), file
