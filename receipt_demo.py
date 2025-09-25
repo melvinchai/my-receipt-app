@@ -83,7 +83,7 @@ def fallback_from_text(text, field):
             return "E-Wallet"
         return ""
     if field == "category":
-        if re.search(r"(entertainment|meals|fuel|transport|training|software|subscription|office supplies|coffee|kopi|restaurant|food|cafe)", text, re.IGNORECASE):
+        if re.search(r"(entertainment|meals|fuel|transport|training|software|subscription|office supplies|coffee|kopi|restaurant|food|cafe|chicken|beverage|tea|drink|lunch|dinner|snack)", text, re.IGNORECASE):
             return "Meals"
         return ""
     if field == "tax_code":
@@ -177,7 +177,4 @@ if uploaded_file:
         # Download buttons
         csv_buffer = BytesIO()
         df.to_csv(csv_buffer, index=False)
-        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv", mime="text/csv")
-
-        json_buffer = BytesIO()
-        json_buffer
+        st.download_button("📥 Download as CSV", data=csv_buffer.getvalue(), file_name="expense_report.csv
