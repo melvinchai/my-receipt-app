@@ -1,76 +1,53 @@
-from google.cloud import documentai_v1beta3 as documentai
-from google.api_core.client_options import ClientOptions
+import streamlit as st
 import pandas as pd
-import os
+import time
 
-# --- Configuration ---
-project_id = "malaysia-receipt-saas"
-location = "us"
-processor_id = "8fb44aee4495bb0f"
-file_path = "MengKee.jpg"
-mime_type = "image/jpeg"
+# Initialize tab state
+if "view" not in st.session_state:
+    st.session_state.view = "Upload"
 
-# --- Set credential path programmatically ---
-credential_path = "/home/melvinchia8/gcs-mount/malaysia-receipt-saas-3cb987586941.json"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
+# Tab selector
+view = st.radio("Choose view", ["Upload", "Status Report", "Expense Summary"], index=["Upload", "Status Report", "Expense Summary"].index(st.session_state.view))
+st.session_state.view = view
 
-# --- Verify authentication ---
-if not os.path.exists(credential_path):
-    print(f"❌ Credential file not found at: {credential_path}")
-    exit()
-else:
-    print(f"✅ Using credentials from: {credential_path}")
+# Dummy data
+dummy_expense = pd.DataFrame({
+    "Date": ["2025-09-26", "2025-09-27"],
+    "Vendor": ["Grab", "Kopi ABC"],
+    "Amount": [12.50, 8.90],
+    "Category": ["Transport", "Meals"]
+})
 
-def process_receipt():
-    client_options = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
-    client = documentai.DocumentProcessorServiceClient(client_options=client_options)
+dummy_status = pd.DataFrame({
+    "Filename": ["grab.jpg", "kopi.jpeg"],
+    "Status": ["✅ Parsed", "⚠️ Fallback"],
+    "Notes": ["Brand: Grab", "Category inferred from 'kopi'"]
+})
 
-    processor_path = f"projects/{project_id}/locations/{location}/processors/{processor_id}"
+# Upload tab
+if view == "Upload":
+    st.header("Receipt Processing")
+    st.write("Upload receipts for parsing and categorization.")
 
-    try:
-        with open(file_path, "rb") as image:
-            image_content = image.read()
-    except FileNotFoundError:
-        print(f"❌ File not found at {file_path}")
-        return
+    with st.form("upload_form"):
+        uploaded_file = st.file_uploader("Upload receipt", type=["jpg", "jpeg", "png", "pdf"])
+        fallback = st.checkbox("Enable fallback logic", value=True)
+        submit = st.form_submit_button("Process")
 
-    raw_document = documentai.RawDocument(content=image_content, mime_type=mime_type)
-    request = documentai.ProcessRequest(name=processor_path, raw_document=raw_document)
+    if submit and uploaded_file:
+        with st.spinner("Parsing receipt..."):
+            time.sleep(2)  # Simulate processing
+        st.success("Receipt processed successfully!")
 
-    try:
-        result = client.process_document(request=request)
-        document = result.document
-        print("✅ Document processed successfully.\n")
-    except Exception as e:
-        print(f"❌ Error during processing: {e}")
-        return
+# Status tab
+elif view == "Status Report":
+    st.header("Status Report")
+    st.dataframe(dummy_status)
 
-    # --- Print full extracted text ---
-    print("📄 Full Extracted Text:\n")
-    print(document.text)
+# Summary tab
+elif view == "Expense Summary":
+    st.header("Expense Report")
+    st.dataframe(dummy_expense)
 
-    # --- Format entities into a table ---
-    print("\n📊 Extracted Entities Table:\n")
-    rows = []
-    for entity in document.entities:
-        text_value = entity.text_anchor.content or entity.mention_text
-        confidence = f"{entity.confidence:.1%}"
-        normalized = (
-            entity.normalized_value.text
-            if entity.normalized_value and entity.normalized_value.text
-            else str(entity.normalized_value.date_value)
-            if entity.normalized_value and hasattr(entity.normalized_value, "date_value")
-            else "N/A"
-        )
-        rows.append({
-            "Type": entity.type_,
-            "Value": text_value,
-            "Confidence": confidence,
-            "Normalized": normalized
-        })
-
-    df = pd.DataFrame(rows)
-    print(df.to_string(index=False))
-
-if __name__ == "__main__":
-    process_receipt()
+    st.download_button("Download Expense Report", dummy_expense.to_csv(index=False), file_name="expense_report.csv")
+    st.download_button("Download Status Report", dummy_status.to_csv(index=False), file_name="status_report.csv")
