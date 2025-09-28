@@ -4,12 +4,15 @@ import streamlit as st
 # Set clean layout
 st.set_page_config(page_title="Demo Offline", layout="centered")
 
-# Hide default Streamlit UI elements
+# Hide all Streamlit UI elements
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
         header {visibility: hidden;}
+        footer {visibility: hidden;}
+        .css-1dp5vir {padding: 0rem;}
+        .css-18e3th9 {padding-top: 1rem;}
+        .css-1d391kg {display: none;}
     </style>
 """, unsafe_allow_html=True)
 
