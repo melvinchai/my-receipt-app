@@ -3,6 +3,7 @@ import pandas as pd
 from PIL import Image
 import io
 import base64
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
@@ -51,7 +52,7 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Thumbnail with persistent click-to-enlarge
+        # Working click-to-enlarge using components.html
         if uploaded:
             image = Image.open(uploaded)
             buffered = io.BytesIO()
@@ -60,27 +61,36 @@ for group_idx, group in enumerate(st.session_state.groups):
 
             html = f"""
             <style>
-            .clickable-img {{
+            .thumbnail {{
                 width: 100px;
-                transition: all 0.3s ease;
                 cursor: pointer;
-                position: relative;
-                z-index: 1;
+                transition: transform 0.3s ease;
             }}
-            .clickable-img.enlarged {{
-                width: 800px;
-                z-index: 1000;
-                position: relative;
+            .overlay {{
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background-color: rgba(0,0,0,0.8);
+                display: none;
+                justify-content: center;
+                align-items: center;
+                z-index: 9999;
+            }}
+            .overlay img {{
+                max-width: 90%;
+                max-height: 90%;
             }}
             </style>
-            <script>
-            function toggleSize(e) {{
-                e.classList.toggle('enlarged');
-            }}
-            </script>
-            <img src="data:image/png;base64,{img_b64}" class="clickable-img" onclick="toggleSize(this)">
+            <div>
+                <img src="data:image/png;base64,{img_b64}" class="thumbnail" onclick="document.getElementById('overlay_{group_idx}_{img_idx}').style.display='flex'">
+                <div id="overlay_{group_idx}_{img_idx}" class="overlay" onclick="this.style.display='none'">
+                    <img src="data:image/png;base64,{img_b64}">
+                </div>
+            </div>
             """
-            cols[img_idx].markdown(html, unsafe_allow_html=True)
+            components.html(html, height=120)
 
 # Add more groups
 if st.button("➕ Add More Claim Group"):
