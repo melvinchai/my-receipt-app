@@ -6,9 +6,17 @@ import io
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
 
-# --- Always-visible buttons at the top ---
-col1, col2 = st.columns([1, 1])
-with col1:
+# ✅ Always initialize session state first
+if "groups" not in st.session_state:
+    st.session_state.groups = [{
+        "claimant_id": "Donald Trump",
+        "images": [None]*4,
+        "doc_types": ["receipt", "proof of payment", "", ""]
+    }]
+
+# ✅ Sidebar controls
+with st.sidebar:
+    st.header("🧭 Controls")
     if st.button("➕ Add More Claim Group"):
         st.session_state.groups.append({
             "claimant_id": "Donald Trump",
@@ -17,16 +25,7 @@ with col1:
         })
         st.experimental_rerun()
 
-with col2:
     submit_triggered = st.button("✅ Submit")
-
-# --- Initialize session state ---
-if "groups" not in st.session_state:
-    st.session_state.groups = [{
-        "claimant_id": "Donald Trump",
-        "images": [None]*4,
-        "doc_types": ["receipt", "proof of payment", "", ""]
-    }]
 
 # --- Simulated entity extraction ---
 def extract_entities(image):
