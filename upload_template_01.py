@@ -52,7 +52,7 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Thumbnail with working click-to-enlarge
+        # Thumbnail with fullscreen overlay
         if uploaded:
             image = Image.open(uploaded)
             buffered = io.BytesIO()
@@ -64,7 +64,6 @@ for group_idx, group in enumerate(st.session_state.groups):
             .thumbnail {{
                 width: 100px;
                 cursor: pointer;
-                transition: transform 0.3s ease;
                 border: 1px solid #ccc;
                 box-shadow: 0 0 5px rgba(0,0,0,0.2);
             }}
@@ -74,7 +73,7 @@ for group_idx, group in enumerate(st.session_state.groups):
                 left: 0;
                 width: 100vw;
                 height: 100vh;
-                background-color: rgba(0,0,0,0.8);
+                background-color: rgba(0,0,0,0.85);
                 display: none;
                 justify-content: center;
                 align-items: center;
@@ -84,7 +83,8 @@ for group_idx, group in enumerate(st.session_state.groups):
                 max-width: 90vw;
                 max-height: 90vh;
                 object-fit: contain;
-                box-shadow: 0 0 20px rgba(255,255,255,0.3);
+                box-shadow: 0 0 30px rgba(255,255,255,0.4);
+                border-radius: 8px;
             }}
             </style>
             <div>
@@ -94,7 +94,7 @@ for group_idx, group in enumerate(st.session_state.groups):
                 </div>
             </div>
             """
-            components.html(html, height=160)
+            components.html(html, height=1000)
 
 # Add more groups
 if st.button("➕ Add More Claim Group"):
