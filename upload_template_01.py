@@ -23,9 +23,13 @@ def extract_entities(image):
 # Render each group
 for group_idx, group in enumerate(st.session_state.groups):
     st.subheader(f"Claim Group {group_idx + 1}")
-    group["claimant_id"] = st.text_input("Claimant ID", value=group["claimant_id"], key=f"claimant_{group_idx}")
-    cols = st.columns(4)
+    group["claimant_id"] = st.text_input(
+        f"Claimant ID for Group {group_idx + 1}",
+        value=group["claimant_id"],
+        key=f"claimant_{group_idx}"
+    )
 
+    cols = st.columns(4)
     for img_idx in range(4):
         key = f"group{group_idx}_img{img_idx}"
         uploaded = cols[img_idx].file_uploader(
@@ -40,7 +44,7 @@ for group_idx, group in enumerate(st.session_state.groups):
             "Type",
             ["receipt", "proof of payment", "other"],
             index=0 if img_idx == 0 else 1,
-            key=f"type_{group_idx}_{img_idx}
+            key=f"type_{group_idx}_{img_idx}"
         )
 
         # Thumbnail preview
