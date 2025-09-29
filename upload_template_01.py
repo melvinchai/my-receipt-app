@@ -52,7 +52,11 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Thumbnail with fullscreen overlay
+# Show thumbnails for all uploaded images
+for group_idx, group in enumerate(st.session_state.groups):
+    st.markdown(f"#### 📸 Thumbnails for Claim Group {group_idx + 1}")
+    thumb_cols = st.columns(4)
+    for img_idx, uploaded in enumerate(group["images"]):
         if uploaded:
             image = Image.open(uploaded)
             buffered = io.BytesIO()
@@ -94,24 +98,28 @@ for group_idx, group in enumerate(st.session_state.groups):
                 </div>
             </div>
             """
-            components.html(html, height=1000)
+            thumb_cols[img_idx].components.html(html, height=1000)
 
-# Add more groups
-if st.button("➕ Add More Claim Group"):
-    st.session_state.groups.append({
-        "claimant_id": "Donald Trump",
-        "images": [None]*4,
-        "doc_types": ["receipt", "proof of payment", "", ""]
-    })
+# --- Always-visible buttons ---
+st.markdown("---")
+col1, col2 = st.columns([1, 1])
+with col1:
+    if st.button("➕ Add More Claim Group"):
+        st.session_state.groups.append({
+            "claimant_id": "Donald Trump",
+            "images": [None]*4,
+            "doc_types": ["receipt", "proof of payment", "", ""]
+        })
+        st.experimental_rerun()
 
-# Submit and extract
-if st.button("✅ Submit"):
-    for group_idx, group in enumerate(st.session_state.groups):
-        st.markdown(f"---\n### 📑 Entity Tables for Claim Group {group_idx + 1}")
-        st.write(f"**Claimant ID:** {group['claimant_id']}")
-        for img_idx, image in enumerate(group["images"]):
-            if image:
-                doc_type = group["doc_types"][img_idx]
-                st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
-                entity_df = extract_entities(image)
-                st.dataframe(entity_df)
+with col2:
+    if st.button("✅ Submit"):
+        for group_idx, group in enumerate(st.session_state.groups):
+            st.markdown(f"---\n### 📑 Entity Tables for Claim Group {group_idx + 1}")
+            st.write(f"**Claimant ID:** {group['claimant_id']}")
+            for img_idx, image in enumerate(group["images"]):
+                if image:
+                    doc_type = group["doc_types"][img_idx]
+                    st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
+                    entity_df = extract_entities(image)
+                    st.dataframe(entity_df)
