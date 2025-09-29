@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 from PIL import Image
 import io
-import base64
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
@@ -52,53 +50,10 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-# Show thumbnails for all uploaded images
-for group_idx, group in enumerate(st.session_state.groups):
-    st.markdown(f"#### 📸 Thumbnails for Claim Group {group_idx + 1}")
-    thumb_cols = st.columns(4)
-    for img_idx, uploaded in enumerate(group["images"]):
+        # Fail-safe full image preview
         if uploaded:
             image = Image.open(uploaded)
-            buffered = io.BytesIO()
-            image.save(buffered, format="PNG")
-            img_b64 = base64.b64encode(buffered.getvalue()).decode()
-
-            html = f"""
-            <style>
-            .thumbnail {{
-                width: 100px;
-                cursor: pointer;
-                border: 1px solid #ccc;
-                box-shadow: 0 0 5px rgba(0,0,0,0.2);
-            }}
-            .overlay {{
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100vw;
-                height: 100vh;
-                background-color: rgba(0,0,0,0.85);
-                display: none;
-                justify-content: center;
-                align-items: center;
-                z-index: 9999;
-            }}
-            .overlay img {{
-                max-width: 90vw;
-                max-height: 90vh;
-                object-fit: contain;
-                box-shadow: 0 0 30px rgba(255,255,255,0.4);
-                border-radius: 8px;
-            }}
-            </style>
-            <div>
-                <img src="data:image/png;base64,{img_b64}" class="thumbnail" onclick="document.getElementById('overlay_{group_idx}_{img_idx}').style.display='flex'">
-                <div id="overlay_{group_idx}_{img_idx}" class="overlay" onclick="this.style.display='none'">
-                    <img src="data:image/png;base64,{img_b64}">
-                </div>
-            </div>
-            """
-            thumb_cols[img_idx].components.html(html, height=1000)
+            st.image(image, caption=f"Document {img_idx + 1} — {group['doc_types'][img_idx]}", use_column_width=True)
 
 # --- Always-visible buttons ---
 st.markdown("---")
