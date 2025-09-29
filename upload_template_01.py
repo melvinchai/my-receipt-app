@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from PIL import Image, ImageOps
-import io
 
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
@@ -14,17 +13,18 @@ if "groups" not in st.session_state:
         "doc_types": ["receipt", "proof of payment", "", ""]
     }]
 
+# ✅ Callback to safely add a new group
+def add_group():
+    st.session_state.groups.append({
+        "claimant_id": "Donald Trump",
+        "images": [None]*4,
+        "doc_types": ["receipt", "proof of payment", "", ""]
+    })
+
 # ✅ Sidebar controls
 with st.sidebar:
     st.header("🧭 Controls")
-    if st.button("➕ Add More Claim Group"):
-        st.session_state.groups.append({
-            "claimant_id": "Donald Trump",
-            "images": [None]*4,
-            "doc_types": ["receipt", "proof of payment", "", ""]
-        })
-        st.experimental_rerun()
-
+    st.button("➕ Add More Claim Group", on_click=add_group)
     submit_triggered = st.button("✅ Submit")
 
 # --- Simulated entity extraction ---
