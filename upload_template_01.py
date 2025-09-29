@@ -51,7 +51,7 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Thumbnail with click-to-enlarge (pure HTML/CSS)
+        # Thumbnail with persistent click-to-enlarge
         if uploaded:
             image = Image.open(uploaded)
             buffered = io.BytesIO()
@@ -64,13 +64,21 @@ for group_idx, group in enumerate(st.session_state.groups):
                 width: 100px;
                 transition: all 0.3s ease;
                 cursor: pointer;
+                position: relative;
+                z-index: 1;
             }}
-            .clickable-img:active {{
-                width: 500px;
+            .clickable-img.enlarged {{
+                width: 800px;
                 z-index: 1000;
+                position: relative;
             }}
             </style>
-            <img src="data:image/png;base64,{img_b64}" class="clickable-img">
+            <script>
+            function toggleSize(e) {{
+                e.classList.toggle('enlarged');
+            }}
+            </script>
+            <img src="data:image/png;base64,{img_b64}" class="clickable-img" onclick="toggleSize(this)">
             """
             cols[img_idx].markdown(html, unsafe_allow_html=True)
 
