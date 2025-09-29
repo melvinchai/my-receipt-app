@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
@@ -50,10 +50,11 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Fail-safe full image preview
+        # Fail-safe full image preview with EXIF rotation
         if uploaded:
             image = Image.open(uploaded)
-            st.image(image, caption=f"Document {img_idx + 1} — {group['doc_types'][img_idx]}", use_column_width=True)
+            image = ImageOps.exif_transpose(image)  # ✅ auto-rotate based on EXIF
+            st.image(image, caption=f"Document {img_idx + 1} — {group['doc_types'][img_idx]}", use_container_width=True)
 
 # --- Always-visible buttons ---
 st.markdown("---")
