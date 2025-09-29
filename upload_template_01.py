@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 from PIL import Image
+import io
+import base64
 
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
@@ -10,8 +12,7 @@ if "groups" not in st.session_state:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
         "images": [None]*4,
-        "doc_types": ["receipt", "proof of payment", "", ""],
-        "preview_index": None  # Track which image to enlarge
+        "doc_types": ["receipt", "proof of payment", "", ""]
     }]
 
 # Simulated entity extraction
@@ -36,7 +37,6 @@ for group_idx, group in enumerate(st.session_state.groups):
         uploader_key = f"group{group_idx}_img{img_idx}"
         type_key = f"type_{group_idx}_{img_idx}"
         remove_key = f"remove_{group_idx}_{img_idx}"
-        preview_key = f"preview_{group_idx}_{img_idx}"
 
         uploaded = cols[img_idx].file_uploader(
             f"Document {img_idx + 1}",
@@ -52,30 +52,38 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
+        # Thumbnail with click-to-enlarge
         if uploaded:
             image = Image.open(uploaded)
-            cols[img_idx].image(image, caption="Preview", width=100)
+            buffered = io.BytesIO()
+            image.save(buffered, format="PNG")
+            img_b64 = base64.b64encode(buffered.getvalue()).decode()
 
-            # Enlarge on click
-            if cols[img_idx].button("🔍 Enlarge", key=preview_key):
-                group["preview_index"] = img_idx
-                st.experimental_rerun()
+            html = f"""
+            <style>
+            .clickable-img {{
+                width: 100px;
+                transition: all 0.3s ease;
+                cursor: pointer;
+            }}
+            .clickable-img.enlarged {{
+                width: 500px;
+                z-index: 1000;
+            }}
+            </style>
+            <script>
+            function toggleSize(e) {{
+                e.classList.toggle('enlarged');
+            }}
+            </script>
+            <img src="data:image/png;base64,{img_b64}" class="clickable-img" onclick="toggleSize(this)">
+            """
+            cols[img_idx].markdown(html, unsafe_allow_html=True)
 
             # Remove button
             if cols[img_idx].button("Remove", key=remove_key):
                 st.session_state[uploader_key] = None
                 group["images"][img_idx] = None
-                group["preview_index"] = None
-                st.experimental_rerun()
-
-    # Show enlarged image if triggered
-    if group["preview_index"] is not None:
-        enlarged = group["images"][group["preview_index"]]
-        if enlarged:
-            st.markdown(f"### 🔍 Enlarged View: Document {group['preview_index'] + 1}")
-            st.image(Image.open(enlarged), use_column_width=True)
-            if st.button("Close Preview", key=f"close_{group_idx}"):
-                group["preview_index"] = None
                 st.experimental_rerun()
 
 # Add more groups
@@ -83,8 +91,7 @@ if st.button("➕ Add More Claim Group"):
     st.session_state.groups.append({
         "claimant_id": "Donald Trump",
         "images": [None]*4,
-        "doc_types": ["receipt", "proof of payment", "", ""],
-        "preview_index": None
+        "doc_types": ["receipt", "proof of payment", "", ""]
     })
 
 # Submit and extract
