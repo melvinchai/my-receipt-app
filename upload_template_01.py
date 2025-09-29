@@ -52,7 +52,7 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Working click-to-enlarge using components.html
+        # Thumbnail with working click-to-enlarge
         if uploaded:
             image = Image.open(uploaded)
             buffered = io.BytesIO()
@@ -65,6 +65,8 @@ for group_idx, group in enumerate(st.session_state.groups):
                 width: 100px;
                 cursor: pointer;
                 transition: transform 0.3s ease;
+                border: 1px solid #ccc;
+                box-shadow: 0 0 5px rgba(0,0,0,0.2);
             }}
             .overlay {{
                 position: fixed;
@@ -79,8 +81,10 @@ for group_idx, group in enumerate(st.session_state.groups):
                 z-index: 9999;
             }}
             .overlay img {{
-                max-width: 90%;
-                max-height: 90%;
+                max-width: 90vw;
+                max-height: 90vh;
+                object-fit: contain;
+                box-shadow: 0 0 20px rgba(255,255,255,0.3);
             }}
             </style>
             <div>
@@ -90,7 +94,7 @@ for group_idx, group in enumerate(st.session_state.groups):
                 </div>
             </div>
             """
-            components.html(html, height=120)
+            components.html(html, height=160)
 
 # Add more groups
 if st.button("➕ Add More Claim Group"):
