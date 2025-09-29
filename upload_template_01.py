@@ -6,7 +6,21 @@ import io
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
 
-# Initialize session state
+# --- Always-visible buttons at the top ---
+col1, col2 = st.columns([1, 1])
+with col1:
+    if st.button("➕ Add More Claim Group"):
+        st.session_state.groups.append({
+            "claimant_id": "Donald Trump",
+            "images": [None]*4,
+            "doc_types": ["receipt", "proof of payment", "", ""]
+        })
+        st.experimental_rerun()
+
+with col2:
+    submit_triggered = st.button("✅ Submit")
+
+# --- Initialize session state ---
 if "groups" not in st.session_state:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
@@ -14,16 +28,16 @@ if "groups" not in st.session_state:
         "doc_types": ["receipt", "proof of payment", "", ""]
     }]
 
-# Simulated entity extraction
+# --- Simulated entity extraction ---
 def extract_entities(image):
     return pd.DataFrame({
         "Field": ["brand_name", "payment_type", "category", "tax_code"],
         "Value": ["MockBrand", "Credit Card", "Meals", "TX123"]
     })
 
-# Render each group
+# --- Render each group ---
 for group_idx, group in enumerate(st.session_state.groups):
-    st.subheader(f"Claim Group {group_idx + 1}")
+    st.markdown(f"---\n### Claim Group {group_idx + 1}")
     group["claimant_id"] = st.selectbox(
         f"Claimant ID for Group {group_idx + 1}",
         ["Donald Trump", "Joe Biden"],
@@ -50,32 +64,20 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Fail-safe full image preview with EXIF rotation
+        # ✅ Fail-safe full image preview with EXIF rotation
         if uploaded:
             image = Image.open(uploaded)
-            image = ImageOps.exif_transpose(image)  # ✅ auto-rotate based on EXIF
+            image = ImageOps.exif_transpose(image)
             st.image(image, caption=f"Document {img_idx + 1} — {group['doc_types'][img_idx]}", use_container_width=True)
 
-# --- Always-visible buttons ---
-st.markdown("---")
-col1, col2 = st.columns([1, 1])
-with col1:
-    if st.button("➕ Add More Claim Group"):
-        st.session_state.groups.append({
-            "claimant_id": "Donald Trump",
-            "images": [None]*4,
-            "doc_types": ["receipt", "proof of payment", "", ""]
-        })
-        st.experimental_rerun()
-
-with col2:
-    if st.button("✅ Submit"):
-        for group_idx, group in enumerate(st.session_state.groups):
-            st.markdown(f"---\n### 📑 Entity Tables for Claim Group {group_idx + 1}")
-            st.write(f"**Claimant ID:** {group['claimant_id']}")
-            for img_idx, image in enumerate(group["images"]):
-                if image:
-                    doc_type = group["doc_types"][img_idx]
-                    st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
-                    entity_df = extract_entities(image)
-                    st.dataframe(entity_df)
+# --- Submit logic ---
+if submit_triggered:
+    for group_idx, group in enumerate(st.session_state.groups):
+        st.markdown(f"---\n### 📑 Entity Tables for Claim Group {group_idx + 1}")
+        st.write(f"**Claimant ID:** {group['claimant_id']}")
+        for img_idx, image in enumerate(group["images"]):
+            if image:
+                doc_type = group["doc_types"][img_idx]
+                st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
+                entity_df = extract_entities(image)
+                st.dataframe(entity_df)
