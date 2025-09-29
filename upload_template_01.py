@@ -36,7 +36,6 @@ for group_idx, group in enumerate(st.session_state.groups):
     for img_idx in range(4):
         uploader_key = f"group{group_idx}_img{img_idx}"
         type_key = f"type_{group_idx}_{img_idx}"
-        remove_key = f"remove_{group_idx}_{img_idx}"
 
         uploaded = cols[img_idx].file_uploader(
             f"Document {img_idx + 1}",
@@ -52,7 +51,7 @@ for group_idx, group in enumerate(st.session_state.groups):
             key=type_key
         )
 
-        # Thumbnail with click-to-enlarge
+        # Thumbnail with click-to-enlarge (pure HTML/CSS)
         if uploaded:
             image = Image.open(uploaded)
             buffered = io.BytesIO()
@@ -66,25 +65,14 @@ for group_idx, group in enumerate(st.session_state.groups):
                 transition: all 0.3s ease;
                 cursor: pointer;
             }}
-            .clickable-img.enlarged {{
+            .clickable-img:active {{
                 width: 500px;
                 z-index: 1000;
             }}
             </style>
-            <script>
-            function toggleSize(e) {{
-                e.classList.toggle('enlarged');
-            }}
-            </script>
-            <img src="data:image/png;base64,{img_b64}" class="clickable-img" onclick="toggleSize(this)">
+            <img src="data:image/png;base64,{img_b64}" class="clickable-img">
             """
             cols[img_idx].markdown(html, unsafe_allow_html=True)
-
-            # Remove button
-            if cols[img_idx].button("Remove", key=remove_key):
-                st.session_state[uploader_key] = None
-                group["images"][img_idx] = None
-                st.experimental_rerun()
 
 # Add more groups
 if st.button("➕ Add More Claim Group"):
