@@ -21,10 +21,12 @@ if "submit_triggered" not in st.session_state:
 
 # --- Simulated entity extraction ---
 def extract_entities(image):
-    return pd.DataFrame({
-        "Field": ["brand_name", "payment_type", "category", "tax_code"],
-        "Value": ["MockBrand", "Credit Card", "Meals", "TX123"]
-    })
+    return {
+        "brand_name": "MockBrand",
+        "payment_type": "Credit Card",
+        "category": "Meals",
+        "tax_code": "TX123"
+    }
 
 # --- Generate stitched preview image ---
 def generate_group_preview(group):
@@ -69,12 +71,13 @@ def submit_group():
     # Reset triggers to simulate fresh screen
     st.session_state.confirm_triggered = False
     st.session_state.submit_triggered = True
+    st.experimental_rerun()
 
 # ✅ Sidebar controls
 with st.sidebar:
     st.header("🧭 Controls")
     if st.session_state.groups:
-        st.button("🖼️ Confirm Current Group", on_click=confirm_group)
+        st.button("📑 Confirm Entity Tables", on_click=confirm_group)
         if st.session_state.confirm_triggered:
             st.button("✅ Submit Current Group", on_click=submit_group)
 
@@ -127,30 +130,34 @@ if st.session_state.confirm_triggered and st.session_state.groups:
         st.markdown(f"### Confirmation Group {group_idx}")
         st.image(preview_image, caption="🖼️ Group Preview Before Submission", use_container_width=True)
 
-# --- Display entity tables + feedback for submitted groups ---
+# --- Display editable entity tables for submitted groups ---
 for idx, group in enumerate(st.session_state.submitted_groups):
     st.markdown(f"---\n### 📑 Entity Tables for Submitted Group {idx + 1}")
     st.write(f"**Claimant ID:** {group['claimant_id']}")
     for img_idx, image in enumerate(group["images"]):
         if image:
             doc_type = group["doc_types"][img_idx]
-            st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
-            entity_df = extract_entities(image)
-            st.dataframe(entity_df)
+            st.markdown(f"**Document {img_idx + 1} ({doc_type}) — Editable Entity Table**")
+            entities = extract_entities(image)
 
-            # --- Feedback dropdowns for entity fields ---
-            st.markdown("**🔧 Contributor Feedback**")
-            payment_type = st.selectbox(
-                "Payment Type", ["Credit Card", "Cash", "Bank Transfer"],
+            cols = st.columns(4)
+            cols[0].markdown("**brand_name**")
+            cols[0].write(entities["brand_name"])
+
+            cols[1].markdown("**payment_type**")
+            payment_type = cols[1].selectbox(
+                "", ["Credit Card", "Cash", "Bank Transfer"],
                 index=0, key=f"payment_type_{idx}_{img_idx}"
             )
-            category = st.selectbox(
-                "Category", ["Meals", "Transport", "Office Supplies"],
+
+            cols[2].markdown("**category**")
+            category = cols[2].selectbox(
+                "", ["Meals", "Transport", "Office Supplies"],
                 index=0, key=f"category_{idx}_{img_idx}"
             )
-            tax_code = st.selectbox(
-                "Tax Code", ["TX123", "TX456", "TX789"],
+
+            cols[3].markdown("**tax_code**")
+            tax_code = cols[3].selectbox(
+                "", ["TX123", "TX456", "TX789"],
                 index=0, key=f"tax_code_{idx}_{img_idx}"
             )
-
-            st.write(f"✅ Confirmed: {payment_type}, {category}, {tax_code}")
