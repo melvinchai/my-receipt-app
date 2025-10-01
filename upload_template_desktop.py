@@ -5,7 +5,7 @@ from PIL import Image, ImageOps, ImageDraw
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
 
-# ✅ Initialize session state
+# 1) SESSION STATE INIT
 if "groups" not in st.session_state:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
@@ -14,16 +14,58 @@ if "groups" not in st.session_state:
     }]
 if "submitted_groups" not in st.session_state:
     st.session_state.submitted_groups = []
-if "confirm_triggered" not in st.session_state:
-    st.session_state.confirm_triggered = False
-if "upload_triggered" not in st.session_state:
-    st.session_state.upload_triggered = False
-if "final_confirm_triggered" not in st.session_state:
-    st.session_state.final_confirm_triggered = False
-if "init_next_group" not in st.session_state:
-    st.session_state.init_next_group = False
+for flag in (
+    "confirm_triggered",
+    "upload_triggered",
+    "final_confirm_triggered",
+    "init_next_group",
+):
+    if flag not in st.session_state:
+        st.session_state[flag] = False
 
-# --- Simulated entity extraction ---
+# 2) HANDLING FINAL CONFIRMATION – NO experimental_rerun()
+def final_confirm():
+    # Move group1 to submitted
+    group = st.session_state.groups.pop(0)
+    st.session_state.submitted_groups.append(group)
+    # Reset all interim flags
+    st.session_state.confirm_triggered = False
+    st.session_state.upload_triggered = False
+    st.session_state.final_confirm_triggered = True
+    # Tell the next run to reinitialize groups
+    st.session_state.init_next_group = True
+
+# 3) ONCE INIT FLAG IS SET, REPLACE WITH A FRESH GROUP
+if st.session_state.init_next_group:
+    st.session_state.groups = [{
+        "claimant_id": "Donald Trump",
+        "images": [None]*4,
+        "doc_types": ["receipt", "proof of payment", "", ""]
+    }]
+    # reset flags so we show Upload → Final Confirm again
+    st.session_state.init_next_group = False
+    st.session_state.final_confirm_triggered = False
+
+# 4) YOUR OTHER CONTROLS
+def confirm_group():
+    st.session_state.confirm_triggered = True
+
+def upload_group():
+    st.session_state.upload_triggered = True
+
+with st.sidebar:
+    st.header("🧭 Controls")
+    if st.session_state.groups:
+        st.button("🖼️ Confirm Current Group", on_click=confirm_group)
+        if st.session_state.confirm_triggered and not st.session_state.upload_triggered:
+            st.button("📤 Upload to AI", on_click=upload_group)
+    if st.session_state.upload_triggered and not st.session_state.final_confirm_triggered:
+        st.button(
+            "✅ Final Confirmation — Proceed to Next Group",
+            on_click=final_confirm
+        )
+
+# 5) ENTITY EXTRACT & PREVIEW HELPERS
 def extract_entities(image):
     return {
         "brand_name": "MockBrand",
@@ -32,141 +74,78 @@ def extract_entities(image):
         "tax_code": "TX123"
     }
 
-# --- Generate stitched preview image ---
 def generate_group_preview(group):
-    images = [img for img in group["images"] if img]
-    if not images:
+    imgs = [img for img in group["images"] if img]
+    if not imgs:
         return None
-
-    pil_images = []
-    for img in images:
-        image = Image.open(img)
-        image = ImageOps.exif_transpose(image)
-        image = image.resize((300, 300))
-        pil_images.append(image)
-
-    total_width = 310 * len(pil_images)
-    preview = Image.new("RGB", (total_width, 320), color="white")
-
-    for idx, img in enumerate(pil_images):
-        preview.paste(img, (idx * 310, 10))
-
+    pil_imgs = []
+    for img in imgs:
+        im = Image.open(img)
+        im = ImageOps.exif_transpose(im).resize((300,300))
+        pil_imgs.append(im)
+    w = 310 * len(pil_imgs)
+    preview = Image.new("RGB", (w, 320), "white")
+    for i, im in enumerate(pil_imgs):
+        preview.paste(im, (i*310, 10))
     draw = ImageDraw.Draw(preview)
-    draw.text((10, 290), f"Claimant: {group['claimant_id']}", fill="black")
-
+    draw.text((10,290), f"Claimant: {group['claimant_id']}", fill="black")
     return preview
 
-# --- Confirm logic ---
-def confirm_group():
-    st.session_state.confirm_triggered = True
-
-# --- Upload to AI logic ---
-def upload_group():
-    st.session_state.upload_triggered = True
-
-# --- Final confirmation logic ---
-def final_confirm():
-    group = st.session_state.groups.pop(0)
-    st.session_state.submitted_groups.append(group)
-
-    # Reset all triggers
-    st.session_state.confirm_triggered = False
-    st.session_state.upload_triggered = False
-    st.session_state.final_confirm_triggered = True
-    st.session_state.init_next_group = True
-
-    st.experimental_rerun()
-
-# ✅ Sidebar controls
-with st.sidebar:
-    st.header("🧭 Controls")
-    if st.session_state.groups:
-        st.button("🖼️ Confirm Current Group", on_click=confirm_group)
-        if st.session_state.confirm_triggered and not st.session_state.upload_triggered:
-            st.button("📤 Upload to AI", on_click=upload_group)
-    if st.session_state.upload_triggered and not st.session_state.final_confirm_triggered:
-        st.button("✅ Final Confirmation — Proceed to Next Group", on_click=final_confirm)
-
-# ✅ Initialize next group after rerun
-if st.session_state.init_next_group:
-    st.session_state.groups = [{
-        "claimant_id": "Donald Trump",
-        "images": [None]*4,
-        "doc_types": ["receipt", "proof of payment", "", ""]
-    }]
-    st.session_state.init_next_group = False
-
-# --- Render current group only ---
+# 6) RENDER CURRENT GROUP UPLOAD FORM
 if st.session_state.groups:
     group = st.session_state.groups[0]
-    group_idx = len(st.session_state.submitted_groups) + 1
-    st.markdown(f"---\n### Claim Group {group_idx}")
+    idx = len(st.session_state.submitted_groups) + 1
+    st.markdown(f"---\n### Claim Group {idx}")
     group["claimant_id"] = st.selectbox(
         "Claimant ID",
-        ["Donald Trump", "Joe Biden"],
-        index=0 if group["claimant_id"] == "Donald Trump" else 1,
-        key=f"claimant_id_{group_idx}"
+        ["Donald Trump","Joe Biden"],
+        index=0 if group["claimant_id"]=="Donald Trump" else 1,
+        key=f"claimant_id_{idx}"
     )
-
     cols = st.columns(4)
-    for img_idx in range(4):
-        uploader_key = f"img_{group_idx}_{img_idx}"
-        type_key = f"type_{group_idx}_{img_idx}"
-
-        uploaded = cols[img_idx].file_uploader(
-            f"Document {img_idx + 1}",
-            type=["jpg", "jpeg", "png"],
-            key=uploader_key
+    for i in range(4):
+        up_key = f"img_{idx}_{i}"
+        tp_key = f"type_{idx}_{i}"
+        uploaded = cols[i].file_uploader(
+            f"Document {i+1}", type=["jpg","png"], key=up_key
         )
-        group["images"][img_idx] = uploaded
-
-        group["doc_types"][img_idx] = cols[img_idx].selectbox(
-            "Type",
-            ["receipt", "proof of payment", "other"],
-            index=0 if img_idx == 0 else 1,
-            key=type_key
+        group["images"][i] = uploaded
+        group["doc_types"][i] = cols[i].selectbox(
+            "Type", ["receipt","proof of payment","other"],
+            index=0 if i==0 else 1, key=tp_key
         )
-
         if uploaded:
-            image = Image.open(uploaded)
-            image = ImageOps.exif_transpose(image)
-            st.image(image, caption=f"Document {img_idx + 1} — {group['doc_types'][img_idx]}", use_container_width=True)
+            img = Image.open(uploaded)
+            img = ImageOps.exif_transpose(img)
+            st.image(img, use_container_width=True,
+                     caption=f"Doc {i+1} — {group['doc_types'][i]}")
 
-# --- Show preview after confirmation ---
+# 7) SHOW PREVIEW AFTER CONFIRM
 if st.session_state.confirm_triggered and st.session_state.groups:
-    preview_image = generate_group_preview(st.session_state.groups[0])
-    if preview_image:
-        st.markdown(f"### Confirmation Group {group_idx}")
-        st.image(preview_image, caption="🖼️ Group Preview Before Upload", use_container_width=True)
+    prev = generate_group_preview(st.session_state.groups[0])
+    if prev:
+        st.markdown(f"### Confirmation Group {idx}")
+        st.image(prev, caption="🖼️ Group Preview Before Upload",
+                 use_container_width=True)
 
-# --- Display editable entity tables after upload ---
+# 8) DISPLAY ENTITY TABLES AFTER UPLOAD
 if st.session_state.upload_triggered:
-    st.markdown(f"---\n### 📑 Entity Tables for Group {group_idx}")
+    st.markdown(f"---\n### 📑 Entity Tables for Group {idx}")
     st.write(f"**Claimant ID:** {group['claimant_id']}")
-    for img_idx, image in enumerate(group["images"]):
-        if image:
-            doc_type = group["doc_types"][img_idx]
-            st.markdown(f"**Document {img_idx + 1} ({doc_type}) — Editable Entity Table**")
-            entities = extract_entities(image)
-
-            cols = st.columns(4)
-            cols[0].markdown("**brand_name**")
-            cols[0].write(entities["brand_name"])
-
-            cols[1].markdown("**payment_type**")
-            cols[1].selectbox(
-                "", ["Credit Card", "Cash", "Bank Transfer"],
-                index=0, key=f"payment_type_{group_idx}_{img_idx}"
-            )
-
-            cols[2].markdown("**category**")
-            cols[2].selectbox(
-                "", ["Meals", "Transport", "Office Supplies"],
-                index=0, key=f"category_{group_idx}_{img_idx}"
-            )
-
-            cols[3].markdown("**tax_code**")
-            cols[3].selectbox(
-                "", ["TX123", "TX456", "TX789"],
-                index=0, key=f"tax_code_{group_idx}_{img_idx}"
-            )
+    for i, img in enumerate(group["images"]):
+        if not img:
+            continue
+        dt = group["doc_types"][i]
+        st.markdown(f"**Document {i+1} ({dt}) — Editable Entity Table**")
+        ent = extract_entities(img)
+        row_cols = st.columns(4)
+        row_cols[0].markdown("**brand_name**");  row_cols[0].write(ent["brand_name"])
+        row_cols[1].markdown("**payment_type**")
+        row_cols[1].selectbox("", ["Credit Card","Cash","Bank Transfer"],
+                              index=0, key=f"payment_type_{idx}_{i}")
+        row_cols[2].markdown("**category**")
+        row_cols[2].selectbox("", ["Meals","Transport","Office Supplies"],
+                              index=0, key=f"category_{idx}_{i}")
+        row_cols[3].markdown("**tax_code**")
+        row_cols[3].selectbox("", ["TX123","TX456","TX789"],
+                              index=0, key=f"tax_code_{idx}_{i}")
