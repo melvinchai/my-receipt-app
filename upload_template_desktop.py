@@ -20,6 +20,8 @@ if "upload_triggered" not in st.session_state:
     st.session_state.upload_triggered = False
 if "final_confirm_triggered" not in st.session_state:
     st.session_state.final_confirm_triggered = False
+if "init_next_group" not in st.session_state:
+    st.session_state.init_next_group = False
 
 # --- Simulated entity extraction ---
 def extract_entities(image):
@@ -66,16 +68,12 @@ def upload_group():
 def final_confirm():
     group = st.session_state.groups.pop(0)
     st.session_state.submitted_groups.append(group)
+
+    # Reset all triggers
     st.session_state.confirm_triggered = False
     st.session_state.upload_triggered = False
     st.session_state.final_confirm_triggered = True
-
-    # Initialize next group
-    st.session_state.groups.append({
-        "claimant_id": "Donald Trump",
-        "images": [None]*4,
-        "doc_types": ["receipt", "proof of payment", "", ""]
-    })
+    st.session_state.init_next_group = True
 
     st.experimental_rerun()
 
@@ -88,6 +86,15 @@ with st.sidebar:
             st.button("📤 Upload to AI", on_click=upload_group)
     if st.session_state.upload_triggered and not st.session_state.final_confirm_triggered:
         st.button("✅ Final Confirmation — Proceed to Next Group", on_click=final_confirm)
+
+# ✅ Initialize next group after rerun
+if st.session_state.init_next_group:
+    st.session_state.groups = [{
+        "claimant_id": "Donald Trump",
+        "images": [None]*4,
+        "doc_types": ["receipt", "proof of payment", "", ""]
+    }]
+    st.session_state.init_next_group = False
 
 # --- Render current group only ---
 if st.session_state.groups:
