@@ -1,5 +1,3 @@
-backup- desktop ver
-
 import streamlit as st
 import pandas as pd
 from PIL import Image, ImageOps, ImageDraw
