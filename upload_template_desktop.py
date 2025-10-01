@@ -61,6 +61,13 @@ def submit_group():
     st.session_state.submit_triggered = True
     st.session_state.confirm_triggered = False
 
+    # Auto-initialize next group
+    st.session_state.groups.append({
+        "claimant_id": "Donald Trump",
+        "images": [None]*4,
+        "doc_types": ["receipt", "proof of payment", "", ""]
+    })
+
 # ✅ Sidebar controls
 with st.sidebar:
     st.header("🧭 Controls")
@@ -78,18 +85,19 @@ if st.session_state.submit_triggered:
 # --- Render current group only ---
 if st.session_state.groups:
     group = st.session_state.groups[0]
-    st.markdown(f"---\n### Claim Group {len(st.session_state.submitted_groups) + 1}")
+    group_idx = len(st.session_state.submitted_groups) + 1
+    st.markdown(f"---\n### Claim Group {group_idx}")
     group["claimant_id"] = st.selectbox(
         "Claimant ID",
         ["Donald Trump", "Joe Biden"],
         index=0 if group["claimant_id"] == "Donald Trump" else 1,
-        key="claimant_id"
+        key=f"claimant_id_{group_idx}"
     )
 
     cols = st.columns(4)
     for img_idx in range(4):
-        uploader_key = f"img_{img_idx}"
-        type_key = f"type_{img_idx}"
+        uploader_key = f"img_{group_idx}_{img_idx}"
+        type_key = f"type_{group_idx}_{img_idx}"
 
         uploaded = cols[img_idx].file_uploader(
             f"Document {img_idx + 1}",
@@ -114,10 +122,10 @@ if st.session_state.groups:
 if st.session_state.confirm_triggered and st.session_state.groups:
     preview_image = generate_group_preview(st.session_state.groups[0])
     if preview_image:
-        st.markdown("### Confirmation Group 1")
-        st.image(preview_image, caption="🖼️ Group 1 Preview Before Submission", use_container_width=True)
+        st.markdown(f"### Confirmation Group {group_idx}")
+        st.image(preview_image, caption="🖼️ Group Preview Before Submission", use_container_width=True)
 
-# --- Optional: Display entity tables for submitted groups ---
+# --- Display entity tables + feedback for submitted groups ---
 for idx, group in enumerate(st.session_state.submitted_groups):
     st.markdown(f"---\n### 📑 Entity Tables for Submitted Group {idx + 1}")
     st.write(f"**Claimant ID:** {group['claimant_id']}")
@@ -127,3 +135,20 @@ for idx, group in enumerate(st.session_state.submitted_groups):
             st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
             entity_df = extract_entities(image)
             st.dataframe(entity_df)
+
+            # --- Feedback dropdowns for entity fields ---
+            st.markdown("**🔧 Contributor Feedback**")
+            payment_type = st.selectbox(
+                "Payment Type", ["Credit Card", "Cash", "Bank Transfer"],
+                index=0, key=f"payment_type_{idx}_{img_idx}"
+            )
+            category = st.selectbox(
+                "Category", ["Meals", "Transport", "Office Supplies"],
+                index=0, key=f"category_{idx}_{img_idx}"
+            )
+            tax_code = st.selectbox(
+                "Tax Code", ["TX123", "TX456", "TX789"],
+                index=0, key=f"tax_code_{idx}_{img_idx}"
+            )
+
+            st.write(f"✅ Confirmed: {payment_type}, {category}, {tax_code}")
