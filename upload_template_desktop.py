@@ -65,7 +65,7 @@ with st.sidebar:
 
 # 5) HELPERS
 def extract_entities(image):
-    # Replace this stub with your AI extraction
+    # Stubbed AI extraction
     return {
         "brand_name": "MockBrand",
         "payment_type": "Credit Card",
@@ -77,18 +77,15 @@ def generate_group_preview(group):
     imgs = [img for img in group["images"] if img]
     if not imgs:
         return None
-
     pil_imgs = []
     for img in imgs:
         im = Image.open(img)
         im = ImageOps.exif_transpose(im).resize((300, 300))
         pil_imgs.append(im)
-
     w = 310 * len(pil_imgs)
     preview = Image.new("RGB", (w, 320), "white")
     for i, im in enumerate(pil_imgs):
         preview.paste(im, (i * 310, 10))
-
     draw = ImageDraw.Draw(preview)
     draw.text((10, 290), f"Claimant: {group['claimant_id']}", fill="black")
     return preview
@@ -141,12 +138,18 @@ if st.session_state.confirm_triggered and st.session_state.groups:
         st.markdown(f"### Confirmation Group {group_idx}")
         st.image(prev, caption="🖼️ Group Preview Before Upload", use_container_width=True)
 
-# 8) DISPLAY VERTICAL ENTITY TABLES AFTER UPLOAD
+# 8) DISPLAY ENTITY TABLES AS A TRUE TABLE AFTER UPLOAD
 if st.session_state.upload_triggered:
     st.markdown(f"---\n### 📑 Entity Tables for Group {group_idx}")
     st.write(f"**Claimant ID:** {group['claimant_id']}")
 
     field_names = ["brand_name", "payment_type", "category", "tax_code"]
+    options_map = {
+        "payment_type": ["Credit Card", "Cash", "Bank Transfer"],
+        "category": ["Meals", "Transport", "Office Supplies"],
+        "tax_code": ["TX123", "TX456", "TX789"]
+    }
+
     for img_idx, image in enumerate(group["images"]):
         if not image:
             continue
@@ -155,22 +158,27 @@ if st.session_state.upload_triggered:
         st.markdown(f"**Document {img_idx + 1} ({doc_type}) — Editable Entity Table**")
         entities = extract_entities(image)
 
+        # Header row
+        h1, h2, h3 = st.columns([1, 2, 2])
+        h1.markdown("**Field**")
+        h2.markdown("**Extracted**")
+        h3.markdown("**Correction**")
+
+        # Data rows
         for field in field_names:
-            label_col, input_col = st.columns([1, 3])
-            label_col.markdown(f"**{field}**")
+            c1, c2, c3 = st.columns([1, 2, 2])
+            c1.write(field)
+            c2.write(entities[field])
 
             if field == "brand_name":
-                input_col.write(entities[field])
+                # no correction for brand_name
+                c3.write(entities[field])
             else:
-                options = {
-                    "payment_type": ["Credit Card", "Cash", "Bank Transfer"],
-                    "category": ["Meals", "Transport", "Office Supplies"],
-                    "tax_code": ["TX123", "TX456", "TX789"]
-                }[field]
-                default_idx = options.index(entities[field]) if entities[field] in options else 0
-                input_col.selectbox(
+                opts = options_map[field]
+                default_idx = opts.index(entities[field]) if entities[field] in opts else 0
+                c3.selectbox(
                     "",
-                    options,
+                    opts,
                     index=default_idx,
                     key=f"{field}_{group_idx}_{img_idx}"
                 )
