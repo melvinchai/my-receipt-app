@@ -54,12 +54,10 @@ def generate_group_preview(group):
 def confirm_group():
     st.session_state.confirm_triggered = True
 
-# --- Submit logic ---
+# --- Submit logic with clean transition ---
 def submit_group():
     group = st.session_state.groups.pop(0)
     st.session_state.submitted_groups.append(group)
-    st.session_state.submit_triggered = True
-    st.session_state.confirm_triggered = False
 
     # Auto-initialize next group
     st.session_state.groups.append({
@@ -67,6 +65,10 @@ def submit_group():
         "images": [None]*4,
         "doc_types": ["receipt", "proof of payment", "", ""]
     })
+
+    # Reset triggers to simulate fresh screen
+    st.session_state.confirm_triggered = False
+    st.session_state.submit_triggered = True
 
 # ✅ Sidebar controls
 with st.sidebar:
