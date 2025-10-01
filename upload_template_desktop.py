@@ -15,13 +15,12 @@ uploaded_state = st.file_uploader(
 )
 if uploaded_state and not st.session_state.loaded_from_file:
     payload = json.loads(uploaded_state.getvalue())
-    # hydrate prior progress
-    st.session_state.submitted_groups = payload["submitted_groups"]
-    st.session_state.groups = payload["groups"]
+    st.session_state.submitted_groups = payload.get("submitted_groups", [])
+    st.session_state.groups = payload.get("groups", [])
     st.session_state.loaded_from_file = True
 
 # ─── 2) SESSION STATE INIT ─────────────────────────────────────────────────
-if "groups" not in st.session_state:
+if "groups" not in st.session_state or not st.session_state.groups:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
         "images": [None] * 4,
@@ -47,14 +46,11 @@ def upload_group():
     st.session_state.upload_triggered = True
 
 def final_confirm():
-    # move current group into submitted
     grp = st.session_state.groups.pop(0)
     st.session_state.submitted_groups.append(grp)
-    # reset flags
     st.session_state.confirm_triggered = False
     st.session_state.upload_triggered = False
     st.session_state.final_confirm_triggered = True
-    # mark next group for init
     st.session_state.init_next_group = True
 
 # ─── 4) INITIALIZE NEXT GROUP AFTER FINAL CONFIRM ───────────────────────────
@@ -67,7 +63,7 @@ if st.session_state.init_next_group:
     st.session_state.init_next_group = False
     st.session_state.final_confirm_triggered = False
 
-# ─── 5) SIDEBAR CONTROLS ────────────────────────────────────────────────────
+# ─── 5) SIDEBAR CONTROLS + SAVE BUTTON ───────────────────────────────────────
 with st.sidebar:
     st.header("🧭 Controls")
     if st.session_state.groups:
@@ -80,9 +76,20 @@ with st.sidebar:
             on_click=final_confirm
         )
 
+    # Always-visible Save Current State button
+    save_payload = {
+        "submitted_groups": st.session_state.submitted_groups,
+        "groups": st.session_state.groups
+    }
+    st.download_button(
+        "💾 Save Current State",
+        data=json.dumps(save_payload),
+        file_name="uploader_progress.json",
+        mime="application/json"
+    )
+
 # ─── 6) HELPERS ─────────────────────────────────────────────────────────────
 def extract_entities(image):
-    # stub AI extraction
     return {
         "brand_name": "MockBrand",
         "payment_type": "Credit Card",
@@ -175,13 +182,13 @@ if st.session_state.upload_triggered:
         st.markdown(f"**Document {img_idx + 1} ({doc_type}) — Editable Entity Table**")
         entities = extract_entities(image)
 
-        # table header
+        # Header row
         h1, h2, h3 = st.columns([1, 2, 2])
         h1.markdown("**Field**")
         h2.markdown("**Extracted**")
         h3.markdown("**Correction**")
 
-        # data rows
+        # Data rows
         for field in field_names:
             c1, c2, c3 = st.columns([1, 2, 2])
             c1.write(field)
@@ -192,17 +199,9 @@ if st.session_state.upload_triggered:
             else:
                 opts = options_map[field]
                 default_idx = opts.index(entities[field]) if entities[field] in opts else 0
-                c3.selectbox("", opts, index=default_idx, key=f"{field}_{group_idx}_{img_idx}")
-
-# ─── 10) SAVE PROGRESS BUTTON ───────────────────────────────────────────────
-if st.session_state.submitted_groups:
-    save_payload = {
-        "submitted_groups": st.session_state.submitted_groups,
-        "groups": st.session_state.groups
-    }
-    st.download_button(
-        "💾 Save Your Progress",
-        data=json.dumps(save_payload),
-        file_name="uploader_progress.json",
-        mime="application/json"
-    )
+                c3.selectbox(
+                    "",
+                    opts,
+                    index=default_idx,
+                    key=f"{field}_{group_idx}_{img_idx}"
+                )
