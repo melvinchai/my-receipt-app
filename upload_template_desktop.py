@@ -6,7 +6,7 @@ from PIL import Image, ImageOps, ImageDraw
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
 
-# ─── 1) LOAD SAVED PROGRESS (APPROACH 1) ─────────────────────────────────────
+# ─── 1) LOAD SAVED PROGRESS (APPROACH 1) ────────────────────────────────────
 if "loaded_from_file" not in st.session_state:
     st.session_state.loaded_from_file = False
 
@@ -15,11 +15,27 @@ uploaded_state = st.file_uploader(
 )
 if uploaded_state and not st.session_state.loaded_from_file:
     payload = json.loads(uploaded_state.getvalue())
-    st.session_state.submitted_groups = payload.get("submitted_groups", [])
-    st.session_state.groups = payload.get("groups", [])
+    # Reconstruct submitted groups (metadata only; images reset to None)
+    submitted_meta = payload.get("submitted_groups_meta", [])
+    st.session_state.submitted_groups = [
+        {
+            "claimant_id": m["claimant_id"],
+            "images": [None] * 4,
+            "doc_types": m["doc_types"]
+        }
+        for m in submitted_meta
+    ]
+    # Reconstruct current group
+    curr = payload.get("current_group_meta", {})
+    st.session_state.groups = [{
+        "claimant_id": curr.get("claimant_id", "Donald Trump"),
+        "images": [None] * 4,
+        "doc_types": curr.get("doc_types", ["receipt", "proof of payment", "", ""])
+    }]
     st.session_state.loaded_from_file = True
 
 # ─── 2) SESSION STATE INIT ─────────────────────────────────────────────────
+# Ensure at least one group
 if "groups" not in st.session_state or not st.session_state.groups:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
@@ -29,6 +45,7 @@ if "groups" not in st.session_state or not st.session_state.groups:
 if "submitted_groups" not in st.session_state:
     st.session_state.submitted_groups = []
 
+# Flags
 for flag in (
     "confirm_triggered",
     "upload_triggered",
@@ -46,11 +63,14 @@ def upload_group():
     st.session_state.upload_triggered = True
 
 def final_confirm():
+    # Move current group metadata into submitted
     grp = st.session_state.groups.pop(0)
     st.session_state.submitted_groups.append(grp)
+    # Reset UI flags
     st.session_state.confirm_triggered = False
     st.session_state.upload_triggered = False
     st.session_state.final_confirm_triggered = True
+    # Trigger fresh group init on next run
     st.session_state.init_next_group = True
 
 # ─── 4) INITIALIZE NEXT GROUP AFTER FINAL CONFIRM ───────────────────────────
@@ -63,7 +83,7 @@ if st.session_state.init_next_group:
     st.session_state.init_next_group = False
     st.session_state.final_confirm_triggered = False
 
-# ─── 5) SIDEBAR CONTROLS + SAVE BUTTON ───────────────────────────────────────
+# ─── 5) SIDEBAR CONTROLS + SAVE BUTTON ─────────────────────────────────────
 with st.sidebar:
     st.header("🧭 Controls")
     if st.session_state.groups:
@@ -76,10 +96,16 @@ with st.sidebar:
             on_click=final_confirm
         )
 
-    # Always-visible Save Current State button
+    # Always‐visible Save Current State
     save_payload = {
-        "submitted_groups": st.session_state.submitted_groups,
-        "groups": st.session_state.groups
+        "submitted_groups_meta": [
+            {"claimant_id": g["claimant_id"], "doc_types": g["doc_types"]}
+            for g in st.session_state.submitted_groups
+        ],
+        "current_group_meta": {
+            "claimant_id": st.session_state.groups[0]["claimant_id"],
+            "doc_types": st.session_state.groups[0]["doc_types"],
+        }
     }
     st.download_button(
         "💾 Save Current State",
@@ -133,17 +159,13 @@ if st.session_state.groups:
         tp_key = f"type_{group_idx}_{img_idx}"
 
         uploaded = cols[img_idx].file_uploader(
-            f"Document {img_idx + 1}",
-            type=["jpg", "jpeg", "png"],
-            key=up_key
+            f"Document {img_idx + 1}", type=["jpg", "jpeg", "png"], key=up_key
         )
         group["images"][img_idx] = uploaded
 
         group["doc_types"][img_idx] = cols[img_idx].selectbox(
-            "Type",
-            ["receipt", "proof of payment", "other"],
-            index=0 if img_idx == 0 else 1,
-            key=tp_key
+            "Type", ["receipt", "proof of payment", "other"],
+            index=0 if img_idx == 0 else 1, key=tp_key
         )
 
         if uploaded:
