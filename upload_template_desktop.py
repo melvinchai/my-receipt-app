@@ -16,15 +16,19 @@ if "submitted_groups" not in st.session_state:
     st.session_state.submitted_groups = []
 if "confirm_triggered" not in st.session_state:
     st.session_state.confirm_triggered = False
-if "submit_triggered" not in st.session_state:
-    st.session_state.submit_triggered = False
+if "upload_triggered" not in st.session_state:
+    st.session_state.upload_triggered = False
+if "final_confirm_triggered" not in st.session_state:
+    st.session_state.final_confirm_triggered = False
 
 # --- Simulated entity extraction ---
 def extract_entities(image):
-    return pd.DataFrame({
-        "Field": ["brand_name", "payment_type", "category", "tax_code"],
-        "Value": ["MockBrand", "Credit Card", "Meals", "TX123"]
-    })
+    return {
+        "brand_name": "MockBrand",
+        "payment_type": "Credit Card",
+        "category": "Meals",
+        "tax_code": "TX123"
+    }
 
 # --- Generate stitched preview image ---
 def generate_group_preview(group):
@@ -54,34 +58,36 @@ def generate_group_preview(group):
 def confirm_group():
     st.session_state.confirm_triggered = True
 
-# --- Submit logic ---
-def submit_group():
+# --- Upload to AI logic ---
+def upload_group():
+    st.session_state.upload_triggered = True
+
+# --- Final confirmation logic ---
+def final_confirm():
     group = st.session_state.groups.pop(0)
     st.session_state.submitted_groups.append(group)
+    st.session_state.confirm_triggered = False
+    st.session_state.upload_triggered = False
+    st.session_state.final_confirm_triggered = True
 
-    # Auto-initialize next group
+    # Initialize next group
     st.session_state.groups.append({
         "claimant_id": "Donald Trump",
         "images": [None]*4,
         "doc_types": ["receipt", "proof of payment", "", ""]
     })
 
-    st.session_state.confirm_triggered = False
-    st.session_state.submit_triggered = True
+    st.experimental_rerun()
 
 # ✅ Sidebar controls
 with st.sidebar:
     st.header("🧭 Controls")
     if st.session_state.groups:
         st.button("🖼️ Confirm Current Group", on_click=confirm_group)
-        if st.session_state.confirm_triggered:
-            st.button("✅ Submit Current Group", on_click=submit_group)
-
-# ✅ Display success message
-if st.session_state.submit_triggered:
-    submitted_idx = len(st.session_state.submitted_groups)
-    st.success(f"✅ Submitted successfully for Group {submitted_idx}")
-    st.session_state.submit_triggered = False
+        if st.session_state.confirm_triggered and not st.session_state.upload_triggered:
+            st.button("📤 Upload to AI", on_click=upload_group)
+    if st.session_state.upload_triggered and not st.session_state.final_confirm_triggered:
+        st.button("✅ Final Confirmation — Proceed to Next Group", on_click=final_confirm)
 
 # --- Render current group only ---
 if st.session_state.groups:
@@ -124,32 +130,36 @@ if st.session_state.confirm_triggered and st.session_state.groups:
     preview_image = generate_group_preview(st.session_state.groups[0])
     if preview_image:
         st.markdown(f"### Confirmation Group {group_idx}")
-        st.image(preview_image, caption="🖼️ Group Preview Before Submission", use_container_width=True)
+        st.image(preview_image, caption="🖼️ Group Preview Before Upload", use_container_width=True)
 
-# --- Display entity tables + feedback for submitted groups ---
-for idx, group in enumerate(st.session_state.submitted_groups):
-    st.markdown(f"---\n### 📑 Entity Tables for Submitted Group {idx + 1}")
+# --- Display editable entity tables after upload ---
+if st.session_state.upload_triggered:
+    st.markdown(f"---\n### 📑 Entity Tables for Group {group_idx}")
     st.write(f"**Claimant ID:** {group['claimant_id']}")
     for img_idx, image in enumerate(group["images"]):
         if image:
             doc_type = group["doc_types"][img_idx]
-            st.markdown(f"**Document {img_idx + 1} ({doc_type})**")
-            entity_df = extract_entities(image)
-            st.dataframe(entity_df)
+            st.markdown(f"**Document {img_idx + 1} ({doc_type}) — Editable Entity Table**")
+            entities = extract_entities(image)
 
-            # --- Feedback dropdowns for entity fields ---
-            st.markdown("**🔧 Contributor Feedback**")
-            payment_type = st.selectbox(
-                "Payment Type", ["Credit Card", "Cash", "Bank Transfer"],
-                index=0, key=f"payment_type_{idx}_{img_idx}"
-            )
-            category = st.selectbox(
-                "Category", ["Meals", "Transport", "Office Supplies"],
-                index=0, key=f"category_{idx}_{img_idx}"
-            )
-            tax_code = st.selectbox(
-                "Tax Code", ["TX123", "TX456", "TX789"],
-                index=0, key=f"tax_code_{idx}_{img_idx}"
+            cols = st.columns(4)
+            cols[0].markdown("**brand_name**")
+            cols[0].write(entities["brand_name"])
+
+            cols[1].markdown("**payment_type**")
+            cols[1].selectbox(
+                "", ["Credit Card", "Cash", "Bank Transfer"],
+                index=0, key=f"payment_type_{group_idx}_{img_idx}"
             )
 
-            st.write(f"✅ Confirmed: {payment_type}, {category}, {tax_code}")
+            cols[2].markdown("**category**")
+            cols[2].selectbox(
+                "", ["Meals", "Transport", "Office Supplies"],
+                index=0, key=f"category_{group_idx}_{img_idx}"
+            )
+
+            cols[3].markdown("**tax_code**")
+            cols[3].selectbox(
+                "", ["TX123", "TX456", "TX789"],
+                index=0, key=f"tax_code_{group_idx}_{img_idx}"
+            )
