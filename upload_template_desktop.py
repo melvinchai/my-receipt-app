@@ -1,51 +1,21 @@
+backup- desktop ver
+
 import streamlit as st
 import pandas as pd
-import json
 from PIL import Image, ImageOps, ImageDraw
 
 st.set_page_config(page_title="Grouped Document Uploader", layout="wide")
 st.title("📄 Grouped Document Uploader")
 
-# ─── 1) LOAD SAVED PROGRESS (APPROACH 1) ────────────────────────────────────
-if "loaded_from_file" not in st.session_state:
-    st.session_state.loaded_from_file = False
-
-uploaded_state = st.file_uploader(
-    "🔄 Load saved progress (JSON)", type="json", key="load_progress"
-)
-if uploaded_state and not st.session_state.loaded_from_file:
-    payload = json.loads(uploaded_state.getvalue())
-    # Reconstruct submitted groups (metadata only; images reset to None)
-    submitted_meta = payload.get("submitted_groups_meta", [])
-    st.session_state.submitted_groups = [
-        {
-            "claimant_id": m["claimant_id"],
-            "images": [None] * 4,
-            "doc_types": m["doc_types"]
-        }
-        for m in submitted_meta
-    ]
-    # Reconstruct current group
-    curr = payload.get("current_group_meta", {})
-    st.session_state.groups = [{
-        "claimant_id": curr.get("claimant_id", "Donald Trump"),
-        "images": [None] * 4,
-        "doc_types": curr.get("doc_types", ["receipt", "proof of payment", "", ""])
-    }]
-    st.session_state.loaded_from_file = True
-
-# ─── 2) SESSION STATE INIT ─────────────────────────────────────────────────
-# Ensure at least one group
-if "groups" not in st.session_state or not st.session_state.groups:
+# 1) SESSION STATE INIT
+if "groups" not in st.session_state:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
-        "images": [None] * 4,
+        "images": [None]*4,
         "doc_types": ["receipt", "proof of payment", "", ""]
     }]
 if "submitted_groups" not in st.session_state:
     st.session_state.submitted_groups = []
-
-# Flags
 for flag in (
     "confirm_triggered",
     "upload_triggered",
@@ -55,7 +25,7 @@ for flag in (
     if flag not in st.session_state:
         st.session_state[flag] = False
 
-# ─── 3) CALLBACKS ───────────────────────────────────────────────────────────
+# 2) CALLBACKS
 def confirm_group():
     st.session_state.confirm_triggered = True
 
@@ -63,27 +33,26 @@ def upload_group():
     st.session_state.upload_triggered = True
 
 def final_confirm():
-    # Move current group metadata into submitted
-    grp = st.session_state.groups.pop(0)
-    st.session_state.submitted_groups.append(grp)
-    # Reset UI flags
+    # Move Group 1 to submitted
+    group = st.session_state.groups.pop(0)
+    st.session_state.submitted_groups.append(group)
+    # Reset flags and trigger next-group init
     st.session_state.confirm_triggered = False
     st.session_state.upload_triggered = False
     st.session_state.final_confirm_triggered = True
-    # Trigger fresh group init on next run
     st.session_state.init_next_group = True
 
-# ─── 4) INITIALIZE NEXT GROUP AFTER FINAL CONFIRM ───────────────────────────
+# 3) INITIALIZE NEXT GROUP AFTER RERUN
 if st.session_state.init_next_group:
     st.session_state.groups = [{
         "claimant_id": "Donald Trump",
-        "images": [None] * 4,
+        "images": [None]*4,
         "doc_types": ["receipt", "proof of payment", "", ""]
     }]
     st.session_state.init_next_group = False
     st.session_state.final_confirm_triggered = False
 
-# ─── 5) SIDEBAR CONTROLS + SAVE BUTTON ─────────────────────────────────────
+# 4) SIDEBAR CONTROLS
 with st.sidebar:
     st.header("🧭 Controls")
     if st.session_state.groups:
@@ -96,26 +65,9 @@ with st.sidebar:
             on_click=final_confirm
         )
 
-    # Always‐visible Save Current State
-    save_payload = {
-        "submitted_groups_meta": [
-            {"claimant_id": g["claimant_id"], "doc_types": g["doc_types"]}
-            for g in st.session_state.submitted_groups
-        ],
-        "current_group_meta": {
-            "claimant_id": st.session_state.groups[0]["claimant_id"],
-            "doc_types": st.session_state.groups[0]["doc_types"],
-        }
-    }
-    st.download_button(
-        "💾 Save Current State",
-        data=json.dumps(save_payload),
-        file_name="uploader_progress.json",
-        mime="application/json"
-    )
-
-# ─── 6) HELPERS ─────────────────────────────────────────────────────────────
+# 5) HELPERS
 def extract_entities(image):
+    # Stubbed AI extraction
     return {
         "brand_name": "MockBrand",
         "payment_type": "Credit Card",
@@ -140,7 +92,7 @@ def generate_group_preview(group):
     draw.text((10, 290), f"Claimant: {group['claimant_id']}", fill="black")
     return preview
 
-# ─── 7) RENDER CURRENT GROUP UPLOAD FORM ────────────────────────────────────
+# 6) RENDER CURRENT GROUP UPLOAD FORM
 if st.session_state.groups:
     group = st.session_state.groups[0]
     group_idx = len(st.session_state.submitted_groups) + 1
@@ -159,13 +111,17 @@ if st.session_state.groups:
         tp_key = f"type_{group_idx}_{img_idx}"
 
         uploaded = cols[img_idx].file_uploader(
-            f"Document {img_idx + 1}", type=["jpg", "jpeg", "png"], key=up_key
+            f"Document {img_idx + 1}",
+            type=["jpg", "jpeg", "png"],
+            key=up_key
         )
         group["images"][img_idx] = uploaded
 
         group["doc_types"][img_idx] = cols[img_idx].selectbox(
-            "Type", ["receipt", "proof of payment", "other"],
-            index=0 if img_idx == 0 else 1, key=tp_key
+            "Type",
+            ["receipt", "proof of payment", "other"],
+            index=0 if img_idx == 0 else 1,
+            key=tp_key
         )
 
         if uploaded:
@@ -177,14 +133,14 @@ if st.session_state.groups:
                 use_container_width=True
             )
 
-# ─── 8) SHOW PREVIEW AFTER CONFIRM ──────────────────────────────────────────
+# 7) SHOW PREVIEW AFTER CONFIRM
 if st.session_state.confirm_triggered and st.session_state.groups:
     prev = generate_group_preview(st.session_state.groups[0])
     if prev:
         st.markdown(f"### Confirmation Group {group_idx}")
         st.image(prev, caption="🖼️ Group Preview Before Upload", use_container_width=True)
 
-# ─── 9) DISPLAY ENTITY TABLES AS A TRUE TABLE AFTER UPLOAD ─────────────────
+# 8) DISPLAY ENTITY TABLES AS A TRUE TABLE AFTER UPLOAD
 if st.session_state.upload_triggered:
     st.markdown(f"---\n### 📑 Entity Tables for Group {group_idx}")
     st.write(f"**Claimant ID:** {group['claimant_id']}")
@@ -217,6 +173,7 @@ if st.session_state.upload_triggered:
             c2.write(entities[field])
 
             if field == "brand_name":
+                # no correction for brand_name
                 c3.write(entities[field])
             else:
                 opts = options_map[field]
