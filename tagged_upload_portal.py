@@ -17,12 +17,8 @@ bucket = client.bucket(bucket_name)
 # Step 1: Tag number input (only show if not yet accepted)
 if "valid_tag" not in st.session_state:
     st.subheader("Step 1: Enter your tag number")
-
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        tag_number = st.text_input("Tag", max_chars=2, key="tag_input")
-    with col2:
-        submit_tag = st.button("Submit Number")
+    tag_number = st.text_input("Tag number (between 20–30)", max_chars=2, key="tag_input")
+    submit_tag = st.button("Submit Number")
 
     if submit_tag:
         if re.fullmatch(r"\d{2}", tag_number) and 20 <= int(tag_number) <= 30:
@@ -34,16 +30,11 @@ if "valid_tag" not in st.session_state:
 # Step 2: Upload section (only if tag is valid)
 if "valid_tag" in st.session_state:
     st.subheader("Step 2: Upload your receipt")
-
-    col_upload, col_exit = st.columns([3, 1])
-    with col_upload:
-        uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
-    with col_exit:
-        exit_upload = st.button("Exit")
+    uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
+    exit_upload = st.button("Exit")
 
     if exit_upload:
-        del st.session_state.valid_tag
-        st.experimental_rerun()
+        st.session_state.pop("valid_tag", None)
 
     if uploaded_file:
         now = datetime.now()
