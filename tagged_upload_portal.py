@@ -69,4 +69,6 @@ elif menu == "View History":
     st.info("Coming soon: View past uploads by tag and date.")
 
 # 🏷️ Manage Tags Placeholder
-elif
+elif menu == "Manage Tags":
+    st.header("🏷️ Tag Management")
+    st.info("Coming soon: Reassign tags, audit contributor activity, and more.")
