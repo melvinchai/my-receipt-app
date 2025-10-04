@@ -4,6 +4,7 @@ from google.oauth2 import service_account
 from datetime import datetime
 import tempfile
 import os
+import re
 
 st.title("📤 Receipt Upload Portal")
 
@@ -15,13 +16,16 @@ bucket = client.bucket(bucket_name)
 
 # Step 1: Tag number input
 st.subheader("Step 1: Enter your tag number")
-tag_number = st.number_input("Enter a tag number (20–30)", min_value=20, max_value=30, step=1, format="%d", key="tag_input")
+tag_number = st.text_input("Enter a 2-digit number", max_chars=2, key="tag_input")
 submit_tag = st.button("Submit Number")
 
-# Store tag number in session state
+# Validate and store tag number
 if submit_tag:
-    st.session_state.valid_tag = str(tag_number)
-    st.success(f"✅ Tag number {tag_number} accepted")
+    if re.fullmatch(r"\d{2}", tag_number):
+        st.session_state.valid_tag = tag_number
+        st.success(f"✅ Tag number {tag_number} accepted")
+    else:
+        st.error("❌ Please enter a valid 2-digit number (10–99).")
 
 # Step 2: Upload section (only if tag is valid)
 if "valid_tag" in st.session_state:
@@ -47,5 +51,3 @@ if "valid_tag" in st.session_state:
         os.remove(tmp_path)
 
         st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
-    else:
-        st.warning("Please upload a file to proceed.")
