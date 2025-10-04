@@ -1,3 +1,20 @@
+import streamlit as st
+from google.cloud import storage
+from google.oauth2 import service_account
+from datetime import datetime
+import tempfile
+import os
+
+# 🧭 Sidebar Navigation
+menu = st.sidebar.selectbox("Menu", ["Upload Receipt", "View History", "Manage Tags"])
+
+# 🔐 Authenticate with GCS
+credentials = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
+client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["project_id"])
+bucket_name = "receipt-upload-bucket-mc"
+bucket = client.bucket(bucket_name)
+
+# 📤 Upload Receipt Module
 if menu == "Upload Receipt":
     st.header("📤 Receipt Upload Portal")
 
@@ -12,7 +29,6 @@ if menu == "Upload Receipt":
 
     if show_upload:
         upload_mode = st.radio("Upload Mode", ["Single Upload", "Mass Upload"])
-
         now = datetime.now()
         folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
 
@@ -49,3 +65,13 @@ if menu == "Upload Receipt":
                     os.remove(tmp_path)
 
                     st.success(f"✅ Uploaded `{filename}` to `{blob_path}`")
+
+# 🕵️ View History Placeholder
+elif menu == "View History":
+    st.header("📜 Receipt History")
+    st.info("Coming soon: View past uploads by tag and date.")
+
+# 🏷️ Manage Tags Placeholder
+elif menu == "Manage Tags":
+    st.header("🏷️ Tag Management")
+    st.info("Coming soon: Reassign tags, audit contributor activity, and more.")
