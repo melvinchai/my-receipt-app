@@ -22,6 +22,7 @@ query_params = st.experimental_get_query_params()
 upload_token = query_params.get("token", [""])[0]
 tag_number = token_map.get(upload_token)
 
+# 🚫 Validate token
 if not tag_number:
     st.error("❌ Invalid or missing upload token.")
     st.stop()
