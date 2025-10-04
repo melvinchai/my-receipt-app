@@ -17,9 +17,8 @@ bucket = client.bucket(bucket_name)
 # 🧩 Hardcoded token-to-tag map (01–99)
 token_map = {f"{i:02}": f"{i:02}" for i in range(1, 100)}
 
-# 🔍 Extract token from URL
-query_params = st.experimental_get_query_params()
-upload_token = query_params.get("token", [""])[0]
+# 🔍 Extract token from URL using st.query_params
+upload_token = st.query_params.get("token", "")
 tag_number = token_map.get(upload_token)
 
 # 🚫 Validate token
