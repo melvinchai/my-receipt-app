@@ -4,3 +4,5 @@ google-auth
 Pillow
 pymupdf
 pdf2image
+streamlit
+google-cloud-storage
