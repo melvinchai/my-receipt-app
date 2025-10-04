@@ -24,12 +24,12 @@ if menu == "Upload Receipt":
     st.session_state.valid_tag = tag_number
     st.info(f"Tag selected: {tag_number}")
 
-    # 🔘 Upload Mode toggle (default: Single)
-    upload_mode = st.radio("Upload Mode", ["Single Upload", "Mass Upload"], index=0)
+    # 🔘 Mass Upload toggle (radio-style)
+    mass_upload = st.radio("Mass Upload", ["Off", "On"], index=0)
     now = datetime.now()
     folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
 
-    if upload_mode == "Single Upload":
+    if mass_upload == "Off":
         uploaded_file = st.file_uploader("Upload a receipt", type=["pdf", "png", "jpg", "jpeg"])
         if uploaded_file:
             filename = uploaded_file.name
@@ -47,7 +47,7 @@ if menu == "Upload Receipt":
 
             st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
 
-    elif upload_mode == "Mass Upload":
+    elif mass_upload == "On":
         uploaded_files = st.file_uploader("Upload multiple receipts", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
         if uploaded_files:
             for file in uploaded_files:
@@ -69,6 +69,4 @@ elif menu == "View History":
     st.info("Coming soon: View past uploads by tag and date.")
 
 # 🏷️ Manage Tags Placeholder
-elif menu == "Manage Tags":
-    st.header("🏷️ Tag Management")
-    st.info("Coming soon: Reassign tags, audit contributor activity, and more.")
+elif
