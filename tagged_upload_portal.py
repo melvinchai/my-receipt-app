@@ -24,12 +24,12 @@ if menu == "Upload Receipt":
     st.session_state.valid_tag = tag_number
     st.info(f"Tag selected: {tag_number}")
 
-    # 🔘 Mass Upload toggle (radio-style)
-    mass_upload = st.radio("Mass Upload", ["Off", "On"], index=0)
+    # ✅ Mass Upload toggle (checkbox-style)
+    mass_upload_enabled = st.checkbox("Enable Mass Upload", value=False)
     now = datetime.now()
     folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
 
-    if mass_upload == "Off":
+    if not mass_upload_enabled:
         uploaded_file = st.file_uploader("Upload a receipt", type=["pdf", "png", "jpg", "jpeg"])
         if uploaded_file:
             filename = uploaded_file.name
@@ -47,7 +47,7 @@ if menu == "Upload Receipt":
 
             st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
 
-    elif mass_upload == "On":
+    else:
         uploaded_files = st.file_uploader("Upload multiple receipts", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
         if uploaded_files:
             for file in uploaded_files:
