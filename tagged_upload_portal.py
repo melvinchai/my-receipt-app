@@ -1,41 +1,45 @@
 import streamlit as st
-from datetime import datetime
 from google.cloud import storage
+from google.oauth2 import service_account
+from datetime import datetime
 import tempfile
+import os
 
-# Configuration
-BUCKET_NAME = "receipt-upload-bucket-mc"
-VALID_TAGS = [str(i).zfill(2) for i in range(20, 31)]  # ['20', '21', ..., '30']
-
-st.set_page_config(page_title="Receipt Upload", page_icon="📤")
 st.title("📤 Receipt Upload Portal")
 
-# Step 1: Ask for 2-digit tag
-tag = st.text_input("Enter your assigned 2-digit ID (between 20 and 30):")
+# Authenticate with GCS using Streamlit Secrets
+credentials = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
+client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["project_id"])
+bucket_name = "receipt-upload-bucket-mc"
+bucket = client.bucket(bucket_name)
 
-# Step 2: Validate tag
-if tag in VALID_TAGS:
-    st.success(f"✅ Tag `{tag}` accepted. You may now upload your receipts.")
-    
-    # Step 3: Upload files
-    uploaded_files = st.file_uploader("Upload your receipt(s)", type=["pdf", "jpg", "jpeg", "png"], accept_multiple_files=True)
+# Upload form
+uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
+tag = st.text_input("Enter a 3-letter tag (e.g. WTR, ELE, FOD)")
+email = st.text_input("Enter your email (optional)")
 
-    if uploaded_files:
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
-        month_folder = datetime.now().strftime("%Y-%m")
+if uploaded_file and tag:
+    # Build folder path: TAG/YYYY-MM/
+    now = datetime.now()
+    folder = f"{tag.upper()}/{now.strftime('%Y-%m')}/"
+    filename = uploaded_file.name
+    blob_path = folder + filename
 
-        for file in uploaded_files:
-            blob_path = f"uploads/{tag}/{month_folder}/{file.name}"
-            blob = bucket.blob(blob_path)
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = tmp.name
 
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(file.read())
-                tmp.seek(0)
-                blob.upload_from_file(tmp)
-                st.success(f"📁 Uploaded to: `{blob_path}`")
+    # Upload to GCS
+    blob = bucket.blob(blob_path)
+    blob.upload_from_filename(tmp_path)
+
+    # Clean up
+    os.remove(tmp_path)
+
+    st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
+    if email:
+        st.info(f"Traceable via tag `{tag.upper()}` and email `{email}`")
+
 else:
-    if tag:
-        st.warning("❌ Invalid ID. Please enter a number between 20 and 30.")
-    else:
-        st.info("Please enter your assigned 2-digit ID to begin.")
+    st.warning("Please upload a file and enter a tag to proceed.")
