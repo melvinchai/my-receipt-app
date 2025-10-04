@@ -56,7 +56,7 @@ if menu == "Upload Receipt":
             os.remove(tmp_path)
 
             if filename.lower().endswith((".png", ".jpg", ".jpeg")):
-                st.image(uploaded_file, caption=f"Preview: {filename}", use_column_width=True)
+                st.image(uploaded_file, caption=f"Preview: {filename}", use_container_width=True)
 
             st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
 
