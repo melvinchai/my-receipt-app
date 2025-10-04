@@ -15,42 +15,37 @@ bucket = client.bucket(bucket_name)
 
 # Step 1: Tag number input
 st.subheader("Step 1: Enter your tag number")
-tag_number = st.text_input("Enter a 2-digit number between 20 and 30", max_chars=2)
-
+tag_number = st.number_input("Enter a tag number (20–30)", min_value=20, max_value=30, step=1, format="%d", key="tag_input")
 submit_tag = st.button("Submit Number")
 
-# Validate tag number
+# Store tag number in session state
 if submit_tag:
-    if tag_number.isdigit() and 20 <= int(tag_number) <= 30:
-        st.success(f"✅ Tag number {tag_number} accepted")
+    st.session_state.valid_tag = str(tag_number)
+    st.success(f"✅ Tag number {tag_number} accepted")
 
-        # Step 2: Upload section
-        st.subheader("Step 2: Upload your receipt")
-        uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
-        email = st.text_input("Enter your email (optional)")
+# Step 2: Upload section (only if tag is valid)
+if "valid_tag" in st.session_state:
+    st.subheader("Step 2: Upload your receipt")
+    uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
 
-        if uploaded_file:
-            now = datetime.now()
-            folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
-            filename = uploaded_file.name
-            blob_path = folder + filename
+    if uploaded_file:
+        now = datetime.now()
+        folder = f"{st.session_state.valid_tag}/{now.strftime('%Y-%m')}/"
+        filename = uploaded_file.name
+        blob_path = folder + filename
 
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(uploaded_file.read())
-                tmp_path = tmp.name
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
 
-            # Upload to GCS
-            blob = bucket.blob(blob_path)
-            blob.upload_from_filename(tmp_path)
+        # Upload to GCS
+        blob = bucket.blob(blob_path)
+        blob.upload_from_filename(tmp_path)
 
-            # Clean up
-            os.remove(tmp_path)
+        # Clean up
+        os.remove(tmp_path)
 
-            st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
-            if email:
-                st.info(f"Traceable via tag `{tag_number}` and email `{email}`")
-        else:
-            st.warning("Please upload a file to proceed.")
+        st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
     else:
-        st.error("❌ Invalid tag number. Please enter a number between 20 and 30.")
+        st.warning("Please upload a file to proceed.")
