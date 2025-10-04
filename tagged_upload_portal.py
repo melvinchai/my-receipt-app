@@ -14,23 +14,36 @@ client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["proj
 bucket_name = "receipt-upload-bucket-mc"
 bucket = client.bucket(bucket_name)
 
-# Step 1: Tag number input (clean 2-digit field)
-st.subheader("Step 1: Enter your tag number")
-tag_number = st.text_input("Tag number (2 digits)", max_chars=2, key="tag_input")
-submit_tag = st.button("Submit Number")
+# Step 1: Tag number input (only show if not yet accepted)
+if "valid_tag" not in st.session_state:
+    st.subheader("Step 1: Enter your tag number")
 
-# Validate and store tag number
-if submit_tag:
-    if re.fullmatch(r"\d{2}", tag_number):
-        st.session_state.valid_tag = tag_number
-        st.success(f"✅ Tag number {tag_number} accepted")
-    else:
-        st.error("❌ Please enter a valid 2-digit number (10–99).")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        tag_number = st.text_input("Tag", max_chars=2, key="tag_input")
+    with col2:
+        submit_tag = st.button("Submit Number")
+
+    if submit_tag:
+        if re.fullmatch(r"\d{2}", tag_number) and 20 <= int(tag_number) <= 30:
+            st.session_state.valid_tag = tag_number
+            st.success(f"✅ Tag number {tag_number} accepted")
+        else:
+            st.error("❌ Please enter a valid 2-digit number between 20 and 30.")
 
 # Step 2: Upload section (only if tag is valid)
 if "valid_tag" in st.session_state:
     st.subheader("Step 2: Upload your receipt")
-    uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
+
+    col_upload, col_exit = st.columns([3, 1])
+    with col_upload:
+        uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
+    with col_exit:
+        exit_upload = st.button("Exit")
+
+    if exit_upload:
+        del st.session_state.valid_tag
+        st.experimental_rerun()
 
     if uploaded_file:
         now = datetime.now()
