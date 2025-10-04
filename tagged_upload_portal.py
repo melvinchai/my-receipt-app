@@ -13,33 +13,44 @@ client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["proj
 bucket_name = "receipt-upload-bucket-mc"
 bucket = client.bucket(bucket_name)
 
-# Upload form
-uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
-tag = st.text_input("Enter a 3-letter tag (e.g. WTR, ELE, FOD)")
-email = st.text_input("Enter your email (optional)")
+# Step 1: Tag number input
+st.subheader("Step 1: Enter your tag number")
+tag_number = st.text_input("Enter a 2-digit number between 20 and 30", max_chars=2)
 
-if uploaded_file and tag:
-    # Build folder path: TAG/YYYY-MM/
-    now = datetime.now()
-    folder = f"{tag.upper()}/{now.strftime('%Y-%m')}/"
-    filename = uploaded_file.name
-    blob_path = folder + filename
+submit_tag = st.button("Submit Number")
 
-    # Save to temp file
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = tmp.name
+# Validate tag number
+if submit_tag:
+    if tag_number.isdigit() and 20 <= int(tag_number) <= 30:
+        st.success(f"✅ Tag number {tag_number} accepted")
 
-    # Upload to GCS
-    blob = bucket.blob(blob_path)
-    blob.upload_from_filename(tmp_path)
+        # Step 2: Upload section
+        st.subheader("Step 2: Upload your receipt")
+        uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
+        email = st.text_input("Enter your email (optional)")
 
-    # Clean up
-    os.remove(tmp_path)
+        if uploaded_file:
+            now = datetime.now()
+            folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
+            filename = uploaded_file.name
+            blob_path = folder + filename
 
-    st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
-    if email:
-        st.info(f"Traceable via tag `{tag.upper()}` and email `{email}`")
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp.write(uploaded_file.read())
+                tmp_path = tmp.name
 
-else:
-    st.warning("Please upload a file and enter a tag to proceed.")
+            # Upload to GCS
+            blob = bucket.blob(blob_path)
+            blob.upload_from_filename(tmp_path)
+
+            # Clean up
+            os.remove(tmp_path)
+
+            st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
+            if email:
+                st.info(f"Traceable via tag `{tag_number}` and email `{email}`")
+        else:
+            st.warning("Please upload a file to proceed.")
+    else:
+        st.error("❌ Invalid tag number. Please enter a number between 20 and 30.")
