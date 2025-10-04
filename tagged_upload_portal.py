@@ -4,42 +4,31 @@ from google.oauth2 import service_account
 from datetime import datetime
 import tempfile
 import os
-import re
 
-st.title("📤 Receipt Upload Portal")
+# 🎯 Sidebar Navigation
+menu = st.sidebar.selectbox("Menu", ["Upload Receipt", "View History", "Manage Tags"])
 
-# Authenticate with GCS using Streamlit Secrets
+# 🔐 Authenticate with GCS
 credentials = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
 client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["project_id"])
 bucket_name = "receipt-upload-bucket-mc"
 bucket = client.bucket(bucket_name)
 
-# Always show tag + upload interface
-st.subheader("Enter your assigned tag number")
-tag_number = st.text_input("Tag number (between 20–30)", max_chars=2, key="tag_input")
+# 📤 Upload Receipt Module
+if menu == "Upload Receipt":
+    st.header("📤 Receipt Upload Portal")
 
-# Validate tag
-if "valid_tag" not in st.session_state:
-    submit_tag = st.button("Submit Number")
-    if submit_tag:
-        if re.fullmatch(r"\d{2}", tag_number) and 20 <= int(tag_number) <= 30:
-            st.session_state.valid_tag = tag_number
-            st.success(f"✅ Tag number {tag_number} accepted")
-        else:
-            st.error("❌ Please enter the 2 digit number assigned to you.")
+    # Tag selection (no range prompt)
+    valid_tags = [f"{i:02}" for i in range(20, 31)]
+    tag_number = st.selectbox("Your assigned tag number", valid_tags, key="tag_input")
+    st.session_state.valid_tag = tag_number
+    st.info(f"Tag selected: {tag_number}")
 
-# Upload section (only if tag is valid)
-if "valid_tag" in st.session_state:
-    st.subheader("Upload your receipt")
+    # Upload interface
     uploaded_file = st.file_uploader("Upload your receipt", type=["pdf", "png", "jpg", "jpeg"])
-    exit_upload = st.button("Exit")
-
-    if exit_upload:
-        st.session_state.pop("valid_tag", None)
-
     if uploaded_file:
         now = datetime.now()
-        folder = f"{st.session_state.valid_tag}/{now.strftime('%Y-%m')}/"
+        folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
         filename = uploaded_file.name
         blob_path = folder + filename
 
@@ -51,8 +40,16 @@ if "valid_tag" in st.session_state:
         # Upload to GCS
         blob = bucket.blob(blob_path)
         blob.upload_from_filename(tmp_path)
-
-        # Clean up
         os.remove(tmp_path)
 
         st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
+
+# 🕵️ Placeholder for View History
+elif menu == "View History":
+    st.header("📜 Receipt History")
+    st.info("Coming soon: View past uploads by tag and date.")
+
+# 🏷️ Placeholder for Manage Tags
+elif menu == "Manage Tags":
+    st.header("🏷️ Tag Management")
+    st.info("Coming soon: Reassign tags, audit contributor activity, and more.")
