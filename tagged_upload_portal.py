@@ -14,15 +14,22 @@ client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["proj
 bucket_name = "receipt-upload-bucket-mc"
 bucket = client.bucket(bucket_name)
 
+# 🧩 Hardcoded token-to-tag map (01–99)
+token_map = {f"{i:02}": f"{i:02}" for i in range(1, 100)}
+
+# 🔍 Extract token from URL
+query_params = st.experimental_get_query_params()
+upload_token = query_params.get("token", [""])[0]
+tag_number = token_map.get(upload_token)
+
+if not tag_number:
+    st.error("❌ Invalid or missing upload token.")
+    st.stop()
+
 # 📤 Upload Receipt Module
 if menu == "Upload Receipt":
     st.header("📤 Receipt Upload Portal")
-
-    # Tag selection (01–99, 2-digit format)
-    valid_tags = [f"{i:02}" for i in range(1, 100)]
-    tag_number = st.selectbox("Your assigned tag number", valid_tags, key="tag_input")
-    st.session_state.valid_tag = tag_number
-    st.info(f"Tag selected: {tag_number}")
+    st.info(f"Your assigned tag: {tag_number}")
 
     # ✅ Mass Upload toggle (checkbox-style)
     mass_upload_enabled = st.checkbox("Enable Mass Upload", value=False)
@@ -39,7 +46,13 @@ if menu == "Upload Receipt":
                 tmp.write(uploaded_file.read())
                 tmp_path = tmp.name
 
-            bucket.blob(blob_path).upload_from_filename(tmp_path)
+            blob = bucket.blob(blob_path)
+            blob.metadata = {
+                "upload_token": upload_token,
+                "timestamp": now.isoformat()
+            }
+            blob.upload_from_filename(tmp_path)
+            blob.patch()
             os.remove(tmp_path)
 
             if filename.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -58,7 +71,13 @@ if menu == "Upload Receipt":
                     tmp.write(file.read())
                     tmp_path = tmp.name
 
-                bucket.blob(blob_path).upload_from_filename(tmp_path)
+                blob = bucket.blob(blob_path)
+                blob.metadata = {
+                    "upload_token": upload_token,
+                    "timestamp": now.isoformat()
+                }
+                blob.upload_from_filename(tmp_path)
+                blob.patch()
                 os.remove(tmp_path)
 
                 st.success(f"✅ Uploaded `{filename}` to `{blob_path}`")
