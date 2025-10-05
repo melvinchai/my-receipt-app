@@ -13,7 +13,20 @@ st.set_page_config(page_title="Tagged Receipt Pair Uploader", layout="wide")
 st.title("📄 Tagged Receipt Pair Uploader with Document AI")
 
 # 🔐 Load credentials from Streamlit Secrets
-gcs_creds = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
+gcs_creds = service_account.Credentials.from_service_account_info({
+    "type": st.secrets["gcs"]["type"],
+    "project_id": st.secrets["gcs"]["project_id"],
+    "private_key_id": st.secrets["gcs"]["private_key_id"],
+    "private_key": st.secrets["gcs"]["private_key"].replace("\\n", "\n"),
+    "client_email": st.secrets["gcs"]["client_email"],
+    "client_id": st.secrets["gcs"]["client_id"],
+    "auth_uri": st.secrets["gcs"]["auth_uri"],
+    "token_uri": st.secrets["gcs"]["token_uri"],
+    "auth_provider_x509_cert_url": st.secrets["gcs"]["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": st.secrets["gcs"]["client_x509_cert_url"],
+    "universe_domain": st.secrets["gcs"]["universe_domain"]
+})
+
 docai_creds = service_account.Credentials.from_service_account_info(
     json.loads(st.secrets["google"]["credentials"])
 )
@@ -27,7 +40,6 @@ bucket = client.bucket(bucket_name)
 token_map = {f"{i:02}": f"{i:02}" for i in range(1, 100)}
 upload_token = st.query_params.get("token", "")
 tag_id = token_map.get(upload_token)
-
 if not tag_id:
     st.error("❌ Invalid or missing upload token.")
     st.stop()
@@ -125,19 +137,15 @@ if menu == "Upload Receipt Pair":
     if receipt_file and payment_file:
         st.markdown("---")
         st.subheader("🖼️ Combined Preview")
-
         receipt_blob_path = upload_to_gcs(receipt_file, f"receipt_{now.strftime('%Y%m%d-%H%M%S')}.jpg")
         payment_blob_path = upload_to_gcs(payment_file, f"payment_{now.strftime('%Y%m%d-%H%M%S')}.jpg")
-
         preview_img = generate_preview(receipt_file, payment_file, claimant_id)
         st.image(preview_img, caption="🧾 Combined Receipt + Payment Proof", use_container_width=True)
-
         pdf_buf = convert_image_to_pdf(preview_img)
         st.download_button("📥 Download Combined PDF", pdf_buf, "receipt_pair.pdf", "application/pdf")
 
         receipt_doc = process_document(receipt_file.getvalue(), "image/jpeg")
         payment_doc = process_document(payment_file.getvalue(), "image/jpeg")
-
         receipt_summary = extract_summary(receipt_doc)
         payment_summary = extract_summary(payment_doc)
         combined_df = pd.DataFrame([{
@@ -145,12 +153,10 @@ if menu == "Upload Receipt Pair":
             **receipt_summary,
             **payment_summary
         }])
-
         st.subheader("📊 Summary Table")
         st.dataframe(combined_df, use_container_width=True)
         csv_buf = combined_df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Summary CSV", csv_buf, "receipt_summary.csv", "text/csv")
-
         st.success(f"✅ Receipt uploaded to `{receipt_blob_path}`")
         st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
 
@@ -161,7 +167,7 @@ elif menu == "Coming Soon":
 elif menu == "Contact":
     st.header("📞 Contact")
     st.markdown("""
-    Please contact **Melvin Chia**  
-    📧 Email: [melvinchia@yahoo.com](mailto:melvinchia@yahoo.com)  
-    📱 WhatsApp: [60127571152](https://wa.me/60127571152)
+        Please contact **Melvin Chia**  
+        📧 Email: [melvinchia@yahoo.com](mailto:melvinchia@yahoo.com)  
+        📱 WhatsApp: [60127571152](https://wa.me/60127571152)
     """)
