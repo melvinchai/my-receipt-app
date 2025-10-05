@@ -1,58 +1,90 @@
-#redeploy
 import streamlit as st
 import pandas as pd
 from PIL import Image, ImageOps, ImageDraw
-from google.cloud import storage
+from google.cloud import storage, documentai_v1beta3 as documentai
 from google.oauth2 import service_account
 from datetime import datetime
 import tempfile
 import io
 import os
+import json
 
 st.set_page_config(page_title="Tagged Receipt Pair Uploader", layout="wide")
-st.title("📄 Tagged Receipt Pair Uploader")
+st.title("📄 Tagged Receipt Pair Uploader with Document AI")
 
-# 🔐 Authenticate with GCS
-credentials = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
-client = storage.Client(credentials=credentials, project=st.secrets["gcs"]["project_id"])
+# 🔐 Load credentials from Streamlit Secrets
+gcs_creds = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
+docai_creds = service_account.Credentials.from_service_account_info(
+    json.loads(st.secrets["google"]["credentials"])
+)
+
+# 📦 GCS Setup
+client = storage.Client(credentials=gcs_creds, project=st.secrets["gcs"]["project_id"])
 bucket_name = "receipt-upload-bucket-mc"
 bucket = client.bucket(bucket_name)
 
-# 🧩 Hardcoded token-to-tag map (01–99)
+# 🧩 Token-to-tag map
 token_map = {f"{i:02}": f"{i:02}" for i in range(1, 100)}
 upload_token = st.query_params.get("token", "")
 tag_id = token_map.get(upload_token)
 
-# 🚫 Validate token
 if not tag_id:
     st.error("❌ Invalid or missing upload token.")
     st.stop()
 
-# 📅 Folder path
 now = datetime.now()
 folder = f"{tag_id}/{now.strftime('%Y-%m')}/"
 
+# 📄 Document AI Setup
+PROJECT_ID = "malaysia-receipt-saas"
+LOCATION = "us"
+PROCESSOR_ID = "8fb44aee4495bb0f"
+docai_client = documentai.DocumentProcessorServiceClient(
+    client_options={"api_endpoint": f"{LOCATION}-documentai.googleapis.com"},
+    credentials=docai_creds
+)
+processor_name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
+
 # 🧠 Helpers
-def extract_entities(image, doc_type):
-    if doc_type == "receipt":
-        return {
-            "brand_name": "MockBrand",
-            "category": "Meals",
-            "tax_code": "TX123"
-        }
-    else:
-        return {
-            "payment_type": "Credit Card",
-            "bank": "MockBank",
-            "transaction_id": "TX999"
-        }
+def extract_entities(document):
+    entities = []
+    if document and document.entities:
+        for entity in document.entities:
+            entities.append({
+                "Field": entity.type_,
+                "Value": entity.mention_text,
+                "Confidence": round(entity.confidence, 2)
+            })
+    return pd.DataFrame(entities)
+
+def extract_summary(document):
+    summary = {}
+    FIELD_ALIASES = {
+        "purchase_date": "invoice_date",
+        "receipt_date": "invoice_date",
+        "date_of_receipt": "invoice_date"
+    }
+    desired_fields = ["invoice_date", "brand_name", "invoice_total"]
+    if document and document.entities:
+        for entity in document.entities:
+            key = FIELD_ALIASES.get(entity.type_, entity.type_)
+            if key in desired_fields:
+                summary[key] = entity.mention_text
+    for field in desired_fields:
+        summary.setdefault(field, "")
+    return summary
+
+def process_document(file_bytes, mime_type):
+    raw_doc = documentai.RawDocument(content=file_bytes, mime_type=mime_type)
+    request = documentai.ProcessRequest(name=processor_name, raw_document=raw_doc)
+    result = docai_client.process_document(request=request)
+    return result.document
 
 def generate_preview(receipt, payment, claimant):
     receipt_img = Image.open(receipt)
     payment_img = Image.open(payment)
     receipt_img = ImageOps.exif_transpose(receipt_img).resize((300, 300))
     payment_img = ImageOps.exif_transpose(payment_img).resize((300, 300))
-
     preview = Image.new("RGB", (620, 340), "white")
     preview.paste(receipt_img, (10, 20))
     preview.paste(payment_img, (320, 20))
@@ -66,20 +98,11 @@ def convert_image_to_pdf(image):
     buf.seek(0)
     return buf
 
-def generate_summary_table(receipt_entities, payment_entities):
-    rows = []
-    for k, v in receipt_entities.items():
-        rows.append({"Document": "Receipt", "Field": k, "Value": v})
-    for k, v in payment_entities.items():
-        rows.append({"Document": "Payment Proof", "Field": k, "Value": v})
-    return pd.DataFrame(rows)
-
 def upload_to_gcs(file_obj, filename):
     blob_path = folder + filename
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(file_obj.read())
         tmp_path = tmp.name
-
     blob = bucket.blob(blob_path)
     blob.metadata = {
         "upload_token": upload_token,
@@ -93,10 +116,8 @@ def upload_to_gcs(file_obj, filename):
 # 🧭 Sidebar Navigation
 menu = st.sidebar.selectbox("Menu", ["Upload Receipt Pair", "Coming Soon", "Contact"])
 
-# 📤 Upload Receipt and Payment Proof
 if menu == "Upload Receipt Pair":
     claimant_id = st.selectbox("Claimant ID", ["Donald Trump", "Joe Biden"])
-
     col1, col2 = st.columns(2)
     receipt_file = col1.file_uploader("Upload Receipt or Bill", type=["jpg", "jpeg", "png"])
     payment_file = col2.file_uploader("Upload Payment Proof", type=["jpg", "jpeg", "png"])
@@ -112,27 +133,23 @@ if menu == "Upload Receipt Pair":
         st.image(preview_img, caption="🧾 Combined Receipt + Payment Proof", use_container_width=True)
 
         pdf_buf = convert_image_to_pdf(preview_img)
-        st.download_button(
-            label="📥 Download Combined PDF",
-            data=pdf_buf,
-            file_name="receipt_pair.pdf",
-            mime="application/pdf"
-        )
+        st.download_button("📥 Download Combined PDF", pdf_buf, "receipt_pair.pdf", "application/pdf")
 
-        receipt_entities = extract_entities(receipt_file, "receipt")
-        payment_entities = extract_entities(payment_file, "payment")
-        df = generate_summary_table(receipt_entities, payment_entities)
+        receipt_doc = process_document(receipt_file.getvalue(), "image/jpeg")
+        payment_doc = process_document(payment_file.getvalue(), "image/jpeg")
+
+        receipt_summary = extract_summary(receipt_doc)
+        payment_summary = extract_summary(payment_doc)
+        combined_df = pd.DataFrame([{
+            "Claimant": claimant_id,
+            **receipt_summary,
+            **payment_summary
+        }])
 
         st.subheader("📊 Summary Table")
-        st.dataframe(df, use_container_width=True)
-
-        csv_buf = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Download Summary CSV",
-            data=csv_buf,
-            file_name="receipt_summary.csv",
-            mime="text/csv"
-        )
+        st.dataframe(combined_df, use_container_width=True)
+        csv_buf = combined_df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download Summary CSV", csv_buf, "receipt_summary.csv", "text/csv")
 
         st.success(f"✅ Receipt uploaded to `{receipt_blob_path}`")
         st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
