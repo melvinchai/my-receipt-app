@@ -1,5 +1,3 @@
-backup code 5-oct2025 my-receipt-app /tagged_upload_portal.py
-
 import streamlit as st
 from google.cloud import storage
 from google.oauth2 import service_account
