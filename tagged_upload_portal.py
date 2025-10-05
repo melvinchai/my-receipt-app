@@ -1,3 +1,5 @@
+backup code 5-oct2025 my-receipt-app /tagged_upload_portal.py
+
 import streamlit as st
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -31,12 +33,10 @@ if menu == "Upload Receipt":
     st.header("📤 Receipt Upload Portal")
     st.info(f"Your assigned tag: {tag_number}")
 
-    # ✅ Upload options
+    # ✅ Mass Upload toggle (checkbox-style)
     mass_upload_enabled = st.checkbox("Enable Mass Upload", value=False)
-    show_preview_enabled = st.checkbox("Show image preview after upload", value=False)
     now = datetime.now()
     folder = f"{tag_number}/{now.strftime('%Y-%m')}/"
-    MAX_FILES = 5
 
     if not mass_upload_enabled:
         uploaded_file = st.file_uploader("Upload a receipt", type=["pdf", "png", "jpg", "jpeg"])
@@ -57,7 +57,7 @@ if menu == "Upload Receipt":
             blob.patch()
             os.remove(tmp_path)
 
-            if show_preview_enabled and filename.lower().endswith((".png", ".jpg", ".jpeg")):
+            if filename.lower().endswith((".png", ".jpg", ".jpeg")):
                 st.image(uploaded_file, caption=f"Preview: {filename}", use_container_width=True)
 
             st.success(f"✅ Uploaded to `{blob_path}` in `{bucket_name}`")
@@ -65,10 +65,6 @@ if menu == "Upload Receipt":
     else:
         uploaded_files = st.file_uploader("Upload multiple receipts", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
         if uploaded_files:
-            if len(uploaded_files) > MAX_FILES:
-                st.error(f"❌ You can only upload up to {MAX_FILES} files at once.")
-                st.stop()
-
             for file in uploaded_files:
                 filename = file.name
                 blob_path = folder + filename
@@ -85,9 +81,6 @@ if menu == "Upload Receipt":
                 blob.upload_from_filename(tmp_path)
                 blob.patch()
                 os.remove(tmp_path)
-
-                if show_preview_enabled and filename.lower().endswith((".png", ".jpg", ".jpeg")):
-                    st.image(file, caption=f"Preview: {filename}", use_container_width=True)
 
                 st.success(f"✅ Uploaded `{filename}` to `{blob_path}`")
 
