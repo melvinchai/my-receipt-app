@@ -196,4 +196,8 @@ if menu == "Upload Receipt Pair":
         st.dataframe(trace_all_fields(receipt_doc), use_container_width=True)
 
         st.markdown("**Payment Fields Extracted:**")
-        st.dataframe(trace_all_fields(payment_doc
+        st.dataframe(trace_all_fields(payment_doc), use_container_width=True)
+
+elif menu == "Coming Soon":
+    st.header("🚧 Coming Soon")
+    st.info("This
