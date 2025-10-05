@@ -165,7 +165,6 @@ if menu == "Upload Receipt Pair":
         combined_df = pd.DataFrame([receipt_row, payment_row])
         combined_df = combined_df[["Type", "merchant_name", "date", "total", "reference_number"]]
 
-        # 🧮 Reconciliation logic
         try:
             r_total = receipt_row["total"].replace(",", "").replace("RM", "").strip()
             p_total = payment_row["total"].replace(",", "").replace("RM", "").strip()
@@ -182,7 +181,6 @@ if menu == "Upload Receipt Pair":
         csv_buf = combined_df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Summary CSV", csv_buf, "receipt_summary.csv", "text/csv")
 
-        # ✅ Upload only if parsing succeeded
         if receipt_doc.entities and payment_doc.entities:
             receipt_blob_path = upload_to_gcs(receipt_file, f"{tag_id}_receipt.jpg")
             payment_blob_path = upload_to_gcs(payment_file, f"{tag_id}_payment.jpg")
@@ -191,7 +189,6 @@ if menu == "Upload Receipt Pair":
         else:
             st.warning("⚠️ Upload skipped—no entities extracted from one or both documents.")
 
-        # 🧠 Trace extracted fields
         st.markdown("---")
         st.subheader("🧠 Processor Field Trace")
 
@@ -199,8 +196,4 @@ if menu == "Upload Receipt Pair":
         st.dataframe(trace_all_fields(receipt_doc), use_container_width=True)
 
         st.markdown("**Payment Fields Extracted:**")
-        st.dataframe(trace_all_fields(payment_doc), use_container_width=True)
-
-elif menu == "Coming Soon":
-    st.header("🚧 Coming Soon")
-    st.info("This feature is under development
+        st.dataframe(trace_all_fields(payment_doc
