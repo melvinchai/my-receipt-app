@@ -47,7 +47,7 @@ folder = f"{tag_id}/{now.strftime('%Y-%m')}/"
 # 📄 Document AI Setup
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
-PROCESSOR_ID = "8fb44aee4495bb0f"
+PROCESSOR_ID = "81bb3655848a4bb8"
 docai_client = documentai.DocumentProcessorServiceClient(
     client_options={"api_endpoint": f"{LOCATION}-documentai.googleapis.com"},
     credentials=docai_creds
