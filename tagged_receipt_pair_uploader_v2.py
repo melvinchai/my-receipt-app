@@ -55,11 +55,14 @@ docai_client = documentai.DocumentProcessorServiceClient(
 processor_name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
 
 # 🧠 Helpers
+KEY_FIELDS = ["merchant_name", "date", "total_amount", "payee_name", "amount", "reference_number"]
+
 def extract_summary(document):
     summary = {}
     if document and document.entities:
         for entity in document.entities:
-            summary[entity.type_] = entity.mention_text
+            if entity.type_ in KEY_FIELDS:
+                summary[entity.type_] = entity.mention_text
     return summary
 
 def process_document(file_bytes, mime_type):
@@ -134,22 +137,23 @@ if menu == "Upload Receipt Pair":
         receipt_summary = extract_summary(receipt_doc)
         payment_summary = extract_summary(payment_doc)
 
-        # 🔍 Reconciliation check
-        receipt_total = receipt_summary.get("total_amount", "").replace(",", "").replace("RM", "").strip()
-        payment_total = payment_summary.get("amount", "").replace(",", "").replace("RM", "").strip()
+        # 🧮 Reconciliation logic
+        receipt_total_raw = receipt_summary.get("total_amount", "").replace(",", "").replace("RM", "").strip()
+        payment_total_raw = payment_summary.get("amount", "").replace(",", "").replace("RM", "").strip()
 
         try:
-            if float(receipt_total) == float(payment_total):
-                st.success(f"✅ Amounts match: RM {receipt_total}")
+            if float(receipt_total_raw) == float(payment_total_raw):
+                st.success(f"✅ Amounts match: RM {receipt_total_raw}")
             else:
-                st.warning(f"⚠️ Mismatch: Receipt shows RM {receipt_total}, payment shows RM {payment_total}")
+                st.warning(f"⚠️ Mismatch: Receipt shows RM {receipt_total_raw}, payment shows RM {payment_total_raw}")
         except:
             st.info("ℹ️ Unable to compare amounts—missing or non-numeric values")
 
+        # 🧾 Summary table
         combined_df = pd.DataFrame([{
             "Claimant": claimant_id,
-            **receipt_summary,
-            **payment_summary
+            "Receipt Fields": receipt_summary,
+            "Payment Fields": payment_summary
         }])
         st.subheader("📊 Summary Table")
         st.dataframe(combined_df, use_container_width=True)
