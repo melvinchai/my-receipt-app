@@ -26,7 +26,7 @@ gcs_creds = service_account.Credentials.from_service_account_info({
     "universe_domain": st.secrets["gcs"]["universe_domain"]
 })
 
-docai_creds = gcs_creds  # Reuse same credentials for Document AI
+docai_creds = gcs_creds
 
 # 📦 GCS Setup
 client = storage.Client(credentials=gcs_creds, project=st.secrets["gcs"]["project_id"])
@@ -55,32 +55,11 @@ docai_client = documentai.DocumentProcessorServiceClient(
 processor_name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
 
 # 🧠 Helpers
-def extract_entities(document):
-    entities = []
-    if document and document.entities:
-        for entity in document.entities:
-            entities.append({
-                "Field": entity.type_,
-                "Value": entity.mention_text,
-                "Confidence": round(entity.confidence, 2)
-            })
-    return pd.DataFrame(entities)
-
 def extract_summary(document):
     summary = {}
-    FIELD_ALIASES = {
-        "purchase_date": "invoice_date",
-        "receipt_date": "invoice_date",
-        "date_of_receipt": "invoice_date"
-    }
-    desired_fields = ["invoice_date", "brand_name", "invoice_total"]
     if document and document.entities:
         for entity in document.entities:
-            key = FIELD_ALIASES.get(entity.type_, entity.type_)
-            if key in desired_fields:
-                summary[key] = entity.mention_text
-    for field in desired_fields:
-        summary.setdefault(field, "")
+            summary[entity.type_] = entity.mention_text
     return summary
 
 def process_document(file_bytes, mime_type):
@@ -134,17 +113,39 @@ if menu == "Upload Receipt Pair":
     if receipt_file and payment_file:
         st.markdown("---")
         st.subheader("🖼️ Combined Preview")
+
+        grayscale = st.toggle("🖤 Convert preview to grayscale", value=False)
+
         receipt_blob_path = upload_to_gcs(receipt_file, f"receipt_{now.strftime('%Y%m%d-%H%M%S')}.jpg")
         payment_blob_path = upload_to_gcs(payment_file, f"payment_{now.strftime('%Y%m%d-%H%M%S')}.jpg")
+
         preview_img = generate_preview(receipt_file, payment_file, claimant_id)
+        if grayscale:
+            preview_img = preview_img.convert("L")
+
         st.image(preview_img, caption="🧾 Combined Receipt + Payment Proof", use_container_width=True)
+
         pdf_buf = convert_image_to_pdf(preview_img)
         st.download_button("📥 Download Combined PDF", pdf_buf, "receipt_pair.pdf", "application/pdf")
 
         receipt_doc = process_document(receipt_file.getvalue(), "image/jpeg")
         payment_doc = process_document(payment_file.getvalue(), "image/jpeg")
+
         receipt_summary = extract_summary(receipt_doc)
         payment_summary = extract_summary(payment_doc)
+
+        # 🔍 Reconciliation check
+        receipt_total = receipt_summary.get("total_amount", "").replace(",", "").replace("RM", "").strip()
+        payment_total = payment_summary.get("amount", "").replace(",", "").replace("RM", "").strip()
+
+        try:
+            if float(receipt_total) == float(payment_total):
+                st.success(f"✅ Amounts match: RM {receipt_total}")
+            else:
+                st.warning(f"⚠️ Mismatch: Receipt shows RM {receipt_total}, payment shows RM {payment_total}")
+        except:
+            st.info("ℹ️ Unable to compare amounts—missing or non-numeric values")
+
         combined_df = pd.DataFrame([{
             "Claimant": claimant_id,
             **receipt_summary,
@@ -152,8 +153,10 @@ if menu == "Upload Receipt Pair":
         }])
         st.subheader("📊 Summary Table")
         st.dataframe(combined_df, use_container_width=True)
+
         csv_buf = combined_df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Summary CSV", csv_buf, "receipt_summary.csv", "text/csv")
+
         st.success(f"✅ Receipt uploaded to `{receipt_blob_path}`")
         st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
 
