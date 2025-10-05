@@ -7,7 +7,6 @@ from datetime import datetime
 import tempfile
 import io
 import os
-import json
 
 st.set_page_config(page_title="Tagged Receipt Pair Uploader", layout="wide")
 st.title("📄 Tagged Receipt Pair Uploader with Document AI")
@@ -27,9 +26,7 @@ gcs_creds = service_account.Credentials.from_service_account_info({
     "universe_domain": st.secrets["gcs"]["universe_domain"]
 })
 
-docai_creds = service_account.Credentials.from_service_account_info(
-    json.loads(st.secrets["google"]["credentials"])
-)
+docai_creds = gcs_creds  # Reuse same credentials for Document AI
 
 # 📦 GCS Setup
 client = storage.Client(credentials=gcs_creds, project=st.secrets["gcs"]["project_id"])
