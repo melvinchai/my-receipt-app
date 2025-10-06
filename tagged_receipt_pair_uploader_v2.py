@@ -3,10 +3,11 @@ import pandas as pd
 from PIL import Image, ImageOps, ImageDraw
 from google.cloud import storage, documentai_v1beta3 as documentai
 from google.oauth2 import service_account
-from datetime import datetime
+from datetime import datetime, timezone
 import tempfile
 import io
 import os
+from uuid import uuid4
 
 st.set_page_config(page_title="Tagged Receipt Pair Uploader", layout="wide")
 st.title("📄 Tagged Receipt Pair Uploader with Document AI")
@@ -41,10 +42,10 @@ if not tag_id:
     st.error("❌ Invalid or missing upload token.")
     st.stop()
 
-now = datetime.now()
+now = datetime.now(timezone.utc)
 folder = f"{tag_id}/{now.strftime('%Y-%m')}/"
 
-# Document AI Setup (use your deployed processor)
+# Document AI Setup (your deployed processor)
 PROJECT_ID = "malaysia-receipt-saas"
 LOCATION = "us"
 PROCESSOR_ID = "81bb3655848a4bb8"
@@ -133,6 +134,11 @@ def convert_image_to_pdf(image):
     buf.seek(0)
     return buf
 
+def make_unique_filename(tag, kind, ext="jpg"):
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    shortid = uuid4().hex[:8]
+    return f"{tag}_{kind}_{ts}_{shortid}.{ext}"
+
 def upload_bytes_to_gcs(file_bytes, filename, metadata=None):
     blob_path = folder + filename
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
@@ -153,7 +159,6 @@ menu = st.sidebar.selectbox("Menu", ["Upload Receipt Pair", "Coming Soon", "Cont
 
 if menu == "Upload Receipt Pair":
     claimant_name = st.text_input("Claimant name", value="", help="Enter claimant name (free text)")
-    payment_optional_note = st.info("Payment proof is optional. If no payment proof is provided, the app will process the receipt only and produce a single-line summary.")
     col1, col2 = st.columns(2)
     receipt_file = col1.file_uploader("Upload Receipt or Bill", type=["jpg", "jpeg", "png"])
     payment_file = col2.file_uploader("Upload Payment Proof (optional)", type=["jpg", "jpeg", "png"])
@@ -204,15 +209,13 @@ if menu == "Upload Receipt Pair":
             payment_row["Type"] = "payment"
             combined_df = pd.DataFrame([receipt_row, payment_row])
         else:
-            # Single-line summary when no payment proof provided
             combined_df = pd.DataFrame([receipt_row])
 
-        # Ensure fixed columns for audit: Type, merchant_name, date, total, reference_number
+        # Ensure fixed columns
         cols = ["Type", "merchant_name", "date", "total", "reference_number"]
         for c in cols:
             if c not in combined_df.columns:
                 combined_df[c] = ""
-
         combined_df = combined_df[cols]
 
         # Reconciliation only if payment_doc exists
@@ -239,7 +242,6 @@ if menu == "Upload Receipt Pair":
         # Summary table and CSV
         st.subheader("📊 Summary Table")
         st.dataframe(combined_df, use_container_width=True)
-
         csv_buf = combined_df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Summary CSV", csv_buf, "receipt_summary.csv", "text/csv")
 
@@ -247,20 +249,24 @@ if menu == "Upload Receipt Pair":
         receipt_has_entities = receipt_doc is not None and getattr(receipt_doc, "entities", None)
         payment_has_entities = payment_doc is not None and getattr(payment_doc, "entities", None)
 
+        metadata = {"claimant_name": claimant_name or "", "payment_proof_included": str(bool(payment_file))}
         if receipt_has_entities:
-            # upload receipt visual and raw bytes
-            metadata = {"claimant_name": claimant_name or "", "payment_proof_included": str(bool(payment_file))}
-            receipt_blob_path = upload_bytes_to_gcs(receipt_bytes, f"{tag_id}_receipt.jpg", metadata=metadata)
+            receipt_filename = make_unique_filename(tag_id, "receipt", ext="jpg")
+            receipt_blob_path = upload_bytes_to_gcs(receipt_bytes, receipt_filename, metadata=metadata)
             st.success(f"✅ Receipt uploaded to `{receipt_blob_path}`")
-            if payment_bytes and payment_has_entities:
-                payment_blob_path = upload_bytes_to_gcs(payment_bytes, f"{tag_id}_payment.jpg", metadata=metadata)
-                st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
-            elif payment_bytes and not payment_has_entities:
-                st.warning("⚠️ Payment proof uploaded skipped because parsing failed; receipt was uploaded.")
+            if payment_bytes:
+                if payment_has_entities:
+                    payment_filename = make_unique_filename(tag_id, "payment", ext="jpg")
+                    payment_blob_path = upload_bytes_to_gcs(payment_bytes, payment_filename, metadata=metadata)
+                    st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
+                else:
+                    payment_filename = make_unique_filename(tag_id, "payment_unparsed", ext="jpg")
+                    payment_blob_path = upload_bytes_to_gcs(payment_bytes, payment_filename, metadata=metadata)
+                    st.warning("⚠️ Payment proof parsing failed; image uploaded with unparsed marker.")
         else:
             st.warning("⚠️ Upload skipped—receipt did not parse or Document AI failed.")
 
-        # Processor Field Trace (always show receipt trace; payment trace if available)
+        # Processor Field Trace
         st.markdown("---")
         st.subheader("🧠 Processor Field Trace")
         st.markdown("**Receipt Fields Extracted:**")
@@ -276,7 +282,7 @@ if menu == "Upload Receipt Pair":
             except Exception:
                 st.write("No payment trace available")
     else:
-        st.info("Please upload at least the receipt to proceed. Payment proof is optional.")
+        st.info("Please upload the receipt to proceed. Payment proof is optional.")
 
 elif menu == "Coming Soon":
     st.header("🚧 Coming Soon")
