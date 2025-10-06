@@ -54,7 +54,7 @@ docai_client = documentai.DocumentProcessorServiceClient(
 )
 processor_name = f"projects/{PROJECT_ID}/locations/{LOCATION}/processors/{PROCESSOR_ID}"
 
-# Helper: extract fixed fields using your custom schema names
+# Helpers using your custom schema names
 def extract_fixed_fields_custom(document, source):
     fields = {
         "merchant_name": "",
@@ -68,7 +68,6 @@ def extract_fixed_fields_custom(document, source):
     for entity in document.entities:
         t = getattr(entity, "type_", "")
         text = getattr(entity, "mention_text", "")
-        # Receipt mapping: use document_issuer_name, document_issue_date, transaction_total_amount
         if source == "receipt":
             if t == "document_issuer_name":
                 fields["merchant_name"] = text
@@ -78,7 +77,6 @@ def extract_fixed_fields_custom(document, source):
                 fields["total"] = text
             elif t == "reference_number":
                 fields["reference_number"] = text
-        # Payment mapping: use document_issuer_bank_name, document_issue_date, transaction_total_amount
         elif source == "payment":
             if t == "document_issuer_bank_name":
                 fields["merchant_name"] = text
@@ -108,7 +106,16 @@ def process_document_bytes(file_bytes, mime_type):
     result = docai_client.process_document(request=request)
     return result.document
 
-def generate_preview(receipt_file, payment_file, claimant):
+def generate_preview_single(receipt_file, claimant):
+    receipt_img = Image.open(receipt_file)
+    receipt_img = ImageOps.exif_transpose(receipt_img).resize((600, 800))
+    preview = Image.new("RGB", receipt_img.size, "white")
+    preview.paste(receipt_img, (0, 0))
+    draw = ImageDraw.Draw(preview)
+    draw.text((10, preview.height - 30), f"Claimant: {claimant}", fill="black")
+    return preview
+
+def generate_preview_pair(receipt_file, payment_file, claimant):
     receipt_img = Image.open(receipt_file)
     payment_img = Image.open(payment_file)
     receipt_img = ImageOps.exif_transpose(receipt_img).resize((300, 300))
@@ -126,13 +133,16 @@ def convert_image_to_pdf(image):
     buf.seek(0)
     return buf
 
-def upload_bytes_to_gcs(file_bytes, filename):
+def upload_bytes_to_gcs(file_bytes, filename, metadata=None):
     blob_path = folder + filename
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
     blob = bucket.blob(blob_path)
-    blob.metadata = {"upload_token": upload_token, "timestamp": now.isoformat()}
+    meta = {"upload_token": upload_token, "timestamp": now.isoformat()}
+    if metadata:
+        meta.update(metadata)
+    blob.metadata = meta
     blob.upload_from_filename(tmp_path)
     blob.patch()
     os.remove(tmp_path)
@@ -142,84 +152,115 @@ def upload_bytes_to_gcs(file_bytes, filename):
 menu = st.sidebar.selectbox("Menu", ["Upload Receipt Pair", "Coming Soon", "Contact"])
 
 if menu == "Upload Receipt Pair":
-    claimant_id = st.selectbox("Claimant ID", ["Donald Trump", "Joe Biden"])
+    claimant_name = st.text_input("Claimant name", value="", help="Enter claimant name (free text)")
+    payment_optional_note = st.info("Payment proof is optional. If no payment proof is provided, the app will process the receipt only and produce a single-line summary.")
     col1, col2 = st.columns(2)
     receipt_file = col1.file_uploader("Upload Receipt or Bill", type=["jpg", "jpeg", "png"])
-    payment_file = col2.file_uploader("Upload Payment Proof", type=["jpg", "jpeg", "png"])
+    payment_file = col2.file_uploader("Upload Payment Proof (optional)", type=["jpg", "jpeg", "png"])
 
-    if receipt_file and payment_file:
+    if receipt_file:
         st.markdown("---")
-        st.subheader("🖼️ Combined Preview")
+        st.subheader("🖼️ Preview")
         grayscale = st.checkbox("🖤 Convert preview to grayscale", value=False)
 
-        preview_img = generate_preview(receipt_file, payment_file, claimant_id)
+        if payment_file:
+            preview_img = generate_preview_pair(receipt_file, payment_file, claimant_name)
+        else:
+            preview_img = generate_preview_single(receipt_file, claimant_name)
+
         if grayscale:
             preview_img = preview_img.convert("L")
-        st.image(preview_img, caption="🧾 Combined Receipt + Payment Proof", use_container_width=True)
+
+        st.image(preview_img, caption="🧾 Receipt Preview", use_container_width=True)
 
         pdf_buf = convert_image_to_pdf(preview_img)
-        st.download_button("📥 Download Combined PDF", pdf_buf, "receipt_pair.pdf", "application/pdf")
+        st.download_button("📥 Download PDF (visual)", pdf_buf, "receipt_visual.pdf", "application/pdf")
 
         # Process documents
         receipt_bytes = receipt_file.getvalue()
-        payment_bytes = payment_file.getvalue()
+        payment_bytes = payment_file.getvalue() if payment_file else None
 
         receipt_doc = None
         payment_doc = None
+
         try:
             receipt_doc = process_document_bytes(receipt_bytes, "image/jpeg")
         except Exception as e:
             st.error(f"Document AI error for receipt: {e}")
-        try:
-            payment_doc = process_document_bytes(payment_bytes, "image/jpeg")
-        except Exception as e:
-            st.error(f"Document AI error for payment: {e}")
 
-        # Extract fields using custom schema names
+        if payment_bytes:
+            try:
+                payment_doc = process_document_bytes(payment_bytes, "image/jpeg")
+            except Exception as e:
+                st.error(f"Document AI error for payment: {e}")
+                payment_doc = None
+
+        # Extract fields
         receipt_row = extract_fixed_fields_custom(receipt_doc, source="receipt")
-        payment_row = extract_fixed_fields_custom(payment_doc, source="payment")
         receipt_row["Type"] = "receipt"
-        payment_row["Type"] = "payment"
 
-        combined_df = pd.DataFrame([receipt_row, payment_row])
-        combined_df = combined_df[["Type", "merchant_name", "date", "total", "reference_number"]]
+        if payment_doc:
+            payment_row = extract_fixed_fields_custom(payment_doc, source="payment")
+            payment_row["Type"] = "payment"
+            combined_df = pd.DataFrame([receipt_row, payment_row])
+        else:
+            # Single-line summary when no payment proof provided
+            combined_df = pd.DataFrame([receipt_row])
 
-        # Reconciliation (transaction_total_amount)
-        def normalise_amount(s):
-            if not s:
-                return None
-            return s.replace(",", "").replace("RM", "").strip()
-        r_total_raw = normalise_amount(receipt_row.get("total", "")) or ""
-        p_total_raw = normalise_amount(payment_row.get("total", "")) or ""
-        try:
-            if r_total_raw and p_total_raw and float(r_total_raw) == float(p_total_raw):
-                st.success(f"✅ Amounts match: RM {r_total_raw}")
-            elif r_total_raw and p_total_raw:
-                st.warning(f"⚠️ Mismatch: Receipt shows RM {r_total_raw}, payment shows RM {p_total_raw}")
-            else:
-                st.info("ℹ️ Unable to compare amounts—missing values")
-        except Exception:
-            st.info("ℹ️ Unable to compare amounts—non-numeric values")
+        # Ensure fixed columns for audit: Type, merchant_name, date, total, reference_number
+        cols = ["Type", "merchant_name", "date", "total", "reference_number"]
+        for c in cols:
+            if c not in combined_df.columns:
+                combined_df[c] = ""
 
-        # Summary table (fixed two rows)
+        combined_df = combined_df[cols]
+
+        # Reconciliation only if payment_doc exists
+        if payment_doc:
+            def normalise_amount(s):
+                if not s:
+                    return None
+                return s.replace(",", "").replace("RM", "").strip()
+            try:
+                r_total = normalise_amount(receipt_row.get("total", "")) or ""
+                p_total = normalise_amount(payment_row.get("total", "")) or ""
+                if r_total and p_total:
+                    if float(r_total) == float(p_total):
+                        st.success(f"✅ Amounts match: RM {r_total}")
+                    else:
+                        st.warning(f"⚠️ Mismatch: Receipt shows RM {r_total}, payment shows RM {p_total}")
+                else:
+                    st.info("ℹ️ Unable to compare amounts—missing values")
+            except Exception:
+                st.info("ℹ️ Unable to compare amounts—non-numeric values")
+        else:
+            st.info("ℹ️ No payment proof provided; reconciliation skipped. Summary contains the receipt only.")
+
+        # Summary table and CSV
         st.subheader("📊 Summary Table")
         st.dataframe(combined_df, use_container_width=True)
 
         csv_buf = combined_df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Summary CSV", csv_buf, "receipt_summary.csv", "text/csv")
 
-        # Upload only if both produced entities
+        # Upload gating: require receipt parsed (entities) to upload. Payment optional.
         receipt_has_entities = receipt_doc is not None and getattr(receipt_doc, "entities", None)
         payment_has_entities = payment_doc is not None and getattr(payment_doc, "entities", None)
-        if receipt_has_entities and payment_has_entities:
-            receipt_blob_path = upload_bytes_to_gcs(receipt_bytes, f"{tag_id}_receipt.jpg")
-            payment_blob_path = upload_bytes_to_gcs(payment_bytes, f"{tag_id}_payment.jpg")
-            st.success(f"✅ Receipt uploaded to `{receipt_blob_path}`")
-            st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
-        else:
-            st.warning("⚠️ Upload skipped—no entities extracted from one or both documents.")
 
-        # Processor Field Trace
+        if receipt_has_entities:
+            # upload receipt visual and raw bytes
+            metadata = {"claimant_name": claimant_name or "", "payment_proof_included": str(bool(payment_file))}
+            receipt_blob_path = upload_bytes_to_gcs(receipt_bytes, f"{tag_id}_receipt.jpg", metadata=metadata)
+            st.success(f"✅ Receipt uploaded to `{receipt_blob_path}`")
+            if payment_bytes and payment_has_entities:
+                payment_blob_path = upload_bytes_to_gcs(payment_bytes, f"{tag_id}_payment.jpg", metadata=metadata)
+                st.success(f"✅ Payment proof uploaded to `{payment_blob_path}`")
+            elif payment_bytes and not payment_has_entities:
+                st.warning("⚠️ Payment proof uploaded skipped because parsing failed; receipt was uploaded.")
+        else:
+            st.warning("⚠️ Upload skipped—receipt did not parse or Document AI failed.")
+
+        # Processor Field Trace (always show receipt trace; payment trace if available)
         st.markdown("---")
         st.subheader("🧠 Processor Field Trace")
         st.markdown("**Receipt Fields Extracted:**")
@@ -228,11 +269,14 @@ if menu == "Upload Receipt Pair":
         except Exception:
             st.write("No receipt trace available")
 
-        st.markdown("**Payment Fields Extracted:**")
-        try:
-            st.dataframe(trace_all_fields(payment_doc), use_container_width=True)
-        except Exception:
-            st.write("No payment trace available")
+        if payment_doc:
+            st.markdown("**Payment Fields Extracted:**")
+            try:
+                st.dataframe(trace_all_fields(payment_doc), use_container_width=True)
+            except Exception:
+                st.write("No payment trace available")
+    else:
+        st.info("Please upload at least the receipt to proceed. Payment proof is optional.")
 
 elif menu == "Coming Soon":
     st.header("🚧 Coming Soon")
