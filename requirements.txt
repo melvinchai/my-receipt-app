@@ -6,3 +6,6 @@ pymupdf
 pdf2image
 streamlit
 google-cloud-storage
+gcsfs
+pandas
+openpyxl
