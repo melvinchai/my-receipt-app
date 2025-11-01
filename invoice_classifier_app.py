@@ -1,14 +1,11 @@
 import streamlit as st
 import pandas as pd
-import gcsfs
 
-# --- Load Excel from GCS ---
+# --- Load Excel from local repo ---
 @st.cache_data
-def load_rule_sheet(sheet_name, gcs_path):
-    fs = gcsfs.GCSFileSystem()
-    with fs.open(gcs_path, 'rb') as f:
-        xls = pd.ExcelFile(f)
-        return pd.read_excel(xls, sheet_name=sheet_name)
+def load_rule_sheet(sheet_name, local_path="invoice_rules.xlsx"):
+    xls = pd.ExcelFile(local_path)
+    return pd.read_excel(xls, sheet_name=sheet_name)
 
 # --- Rule Evaluation ---
 def classify_invoice(data, rules_df):
@@ -29,6 +26,15 @@ def validate_invoice(data, validation_df):
         except Exception:
             continue
     return errors
+
+def determine_submission_action(data, submission_df):
+    for _, row in submission_df.iterrows():
+        try:
+            if eval(row['Condition'], {}, data):
+                return row['Action']
+        except Exception:
+            continue
+    return "Unknown"
 
 # --- Streamlit UI ---
 st.title("🧾 LHDN Invoice Classifier")
@@ -62,14 +68,15 @@ if submitted:
         "status": status
     }
 
-    # Load rules from GCS
-    gcs_path = "your-bucket-name/rules/invoice_rules.xlsx"
-    classification_df = load_rule_sheet("ClassificationRules", gcs_path)
-    validation_df = load_rule_sheet("ValidationRules", gcs_path)
-    submission_df = load_rule_sheet("SubmissionRules", gcs_path)
+    # Load rule sheets from local Excel
+    xls_path = "invoice_rules.xlsx"
+    classification_df = load_rule_sheet("ClassificationRules", xls_path)
+    validation_df = load_rule_sheet("ValidationRules", xls_path)
+    submission_df = load_rule_sheet("SubmissionRules", xls_path)
 
     invoice_type_result = classify_invoice(data, classification_df)
     validation_errors = validate_invoice(data, validation_df)
+    submission_action = determine_submission_action(data, submission_df)
 
     st.subheader("📌 Classification Result")
     st.write(f"**Invoice Type:** `{invoice_type_result}`")
@@ -79,5 +86,4 @@ if submitted:
         for err in validation_errors:
             st.write(f"- {err}")
     else:
-        st.success("Invoice is valid and ready for submission.")
-
+        st.success(f"✅ Submission Action: `{submission_action}`")
