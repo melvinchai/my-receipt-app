@@ -36,6 +36,15 @@ def determine_submission_action(data, submission_df):
             continue
     return "Unknown", "No matching condition"
 
+# --- General TIN Injection ---
+def apply_general_TIN(data, invoice_type_result):
+    if invoice_type_result.startswith("Self-Billed"):
+        data["seller_TIN"] = "G0000000000"  # General TIN placeholder
+        data["TIN_source"] = "General TIN applied by buyer"
+    else:
+        data["TIN_source"] = "Seller-provided TIN"
+    return data
+
 # --- Streamlit UI ---
 st.title("🧾 LHDN Invoice Classifier")
 
@@ -75,12 +84,17 @@ if submitted:
     submission_df = load_rule_sheet("SubmissionRules", xls_path)
 
     invoice_type_result, matched_classification = classify_invoice(data, classification_df)
+    data = apply_general_TIN(data, invoice_type_result)
     validation_errors = validate_invoice(data, validation_df)
     submission_action, matched_submission = determine_submission_action(data, submission_df)
 
     st.subheader("📌 Classification Result")
     st.write(f"**Invoice Type:** `{invoice_type_result}`")
     st.caption(f"Matched rule: `{matched_classification}`")
+
+    st.write(f"**TIN Source:** `{data['TIN_source']}`")
+    if "seller_TIN" in data:
+        st.write(f"**Seller TIN Used:** `{data['seller_TIN']}`")
 
     if validation_errors:
         st.error("Validation Errors:")
