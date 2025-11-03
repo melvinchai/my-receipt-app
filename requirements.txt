@@ -9,3 +9,5 @@ google-cloud-storage
 gcsfs
 pandas
 openpyxl
+pytesseract
+pdfplumber
