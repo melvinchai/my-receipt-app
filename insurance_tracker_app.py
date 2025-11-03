@@ -21,9 +21,7 @@ base_folder = f"data/{tag_id}/"
 st.title("📁 Insurance Document Tracker")
 st.caption(f"Logged in as: `{tag_id}`")
 
-category = "Car"
-subtag = st.text_input("Enter vehicle number (e.g. XYZ123)", placeholder="e.g. XYZ123")
-uploaded_file = st.file_uploader("Upload insurance letter (image or PDF)", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload insurance letter (image only)", type=["jpg", "jpeg", "png"])
 submit = st.button("📤 Upload & Parse")
 
 # --- OCR + Parser ---
@@ -37,26 +35,33 @@ def extract_fields_from_text(text):
     if policy_match:
         fields["policy_no"] = policy_match.group(1)
     if start_match:
-        fields["start"] = str(datetime.strptime(start_match.group(1), "%d %b %Y").date())
+        try:
+            fields["start"] = str(datetime.strptime(start_match.group(1), "%d %b %Y").date())
+        except:
+            fields["start"] = start_match.group(1)
     if end_match:
-        fields["end"] = str(datetime.strptime(end_match.group(1), "%d %b %Y").date())
+        try:
+            fields["end"] = str(datetime.strptime(end_match.group(1), "%d %b %Y").date())
+        except:
+            fields["end"] = end_match.group(1)
     if vehicle_match:
         fields["vehicle_no"] = vehicle_match.group(1)
 
     return fields
 
 # --- Save + Parse ---
-if submit and uploaded_file and subtag:
-    folder_path = os.path.join(base_folder, category, subtag)
+if submit and uploaded_file:
+    image = Image.open(uploaded_file)
+    text = pytesseract.image_to_string(image)
+    fields = extract_fields_from_text(text)
+
+    vehicle_no = fields.get("vehicle_no", "UnknownVehicle")
+    folder_path = os.path.join(base_folder, "Car", vehicle_no)
     os.makedirs(folder_path, exist_ok=True)
 
     file_path = os.path.join(folder_path, uploaded_file.name)
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-
-    image = Image.open(uploaded_file)
-    text = pytesseract.image_to_string(image)
-    fields = extract_fields_from_text(text)
 
     metadata_path = os.path.join(folder_path, "metadata.json")
     if os.path.exists(metadata_path):
@@ -69,18 +74,16 @@ if submit and uploaded_file and subtag:
         "policy_no": fields.get("policy_no", "Unknown"),
         "start": fields.get("start", "Unknown"),
         "end": fields.get("end", "Unknown"),
-        "vehicle_no": fields.get("vehicle_no", subtag),
+        "vehicle_no": vehicle_no,
         "reminder_set": True
     }
 
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    st.success(f"✅ Document saved and parsed for `{subtag}`")
+    st.success(f"✅ Document saved and parsed for `{vehicle_no}`")
     st.write("**Extracted Fields:**")
     st.json(metadata["insurance"])
 
 elif submit and not uploaded_file:
     st.error("Please upload a document.")
-elif submit and not subtag:
-    st.error("Please enter a vehicle number.")
