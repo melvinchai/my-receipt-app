@@ -18,34 +18,49 @@ now = datetime.now(timezone.utc)
 base_folder = f"data/{tag_id}/"
 
 # --- UI ---
-st.title("📁 Insurance Document Tracker")
+st.title("📸 Smart Insurance Parser")
 st.caption(f"Logged in as: `{tag_id}`")
-
-uploaded_file = st.file_uploader("Upload insurance letter (image only)", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload insurance photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
 submit = st.button("📤 Upload & Parse")
 
-# --- OCR + Parser ---
-def extract_fields_from_text(text):
+# --- OCR + Smart Field Extraction ---
+def extract_fields(text):
     fields = {}
-    policy_match = re.search(r"Policy\s*No[:\s]*([A-Z0-9]+)", text)
-    start_match = re.search(r"from\s*(\d{1,2}\s*\w+\s*\d{4})", text, re.IGNORECASE)
-    end_match = re.search(r"to\s*(\d{1,2}\s*\w+\s*\d{4})", text, re.IGNORECASE)
-    vehicle_match = re.search(r"Vehicle\s*No[:\s]*([A-Z0-9]+)", text)
 
+    # Policy number
+    policy_match = re.search(r"Policy\s*(?:Number|No)?[:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
     if policy_match:
         fields["policy_no"] = policy_match.group(1)
-    if start_match:
+
+    # Coverage dates
+    date_range = re.search(r"Period\s*of\s*Insurance[:\s]*(\d{1,2}\s*\w+\s*\d{4})\s*to\s*(\d{1,2}\s*\w+\s*\d{4})", text, re.IGNORECASE)
+    if date_range:
         try:
-            fields["start"] = str(datetime.strptime(start_match.group(1), "%d %b %Y").date())
+            fields["start"] = str(datetime.strptime(date_range.group(1), "%d %B %Y").date())
+            fields["end"] = str(datetime.strptime(date_range.group(2), "%d %B %Y").date())
         except:
-            fields["start"] = start_match.group(1)
-    if end_match:
-        try:
-            fields["end"] = str(datetime.strptime(end_match.group(1), "%d %b %Y").date())
-        except:
-            fields["end"] = end_match.group(1)
+            fields["start"] = date_range.group(1)
+            fields["end"] = date_range.group(2)
+
+    # Vehicle make/model
+    vehicle_match = re.search(r"(?:Make\s*and\s*Model|Vehicle)\s*[:\s]*(.+?)\n", text, re.IGNORECASE)
     if vehicle_match:
-        fields["vehicle_no"] = vehicle_match.group(1)
+        fields["vehicle"] = vehicle_match.group(1).strip()
+
+    # Plate number (e.g. ZZY123)
+    plate_match = re.search(r"\b[A-Z]{2,3}\d{3,4}\b", text)
+    if plate_match:
+        fields["plate_no"] = plate_match.group(0)
+
+    # Insurer detection
+    if "Coles Car Insurance" in text:
+        fields["insurer"] = "Coles"
+    elif "AAMI" in text:
+        fields["insurer"] = "AAMI"
+    else:
+        insurer_match = re.search(r"Insurer\s*[:\s]*(.+?)\n", text, re.IGNORECASE)
+        if insurer_match:
+            fields["insurer"] = insurer_match.group(1).strip()
 
     return fields
 
@@ -53,10 +68,10 @@ def extract_fields_from_text(text):
 if submit and uploaded_file:
     image = Image.open(uploaded_file)
     text = pytesseract.image_to_string(image)
-    fields = extract_fields_from_text(text)
+    fields = extract_fields(text)
 
-    vehicle_no = fields.get("vehicle_no", "UnknownVehicle")
-    folder_path = os.path.join(base_folder, "Car", vehicle_no)
+    vehicle_id = fields.get("plate_no", fields.get("vehicle", "UnknownVehicle")).replace(" ", "_")
+    folder_path = os.path.join(base_folder, "Car", vehicle_id)
     os.makedirs(folder_path, exist_ok=True)
 
     file_path = os.path.join(folder_path, uploaded_file.name)
@@ -74,16 +89,18 @@ if submit and uploaded_file:
         "policy_no": fields.get("policy_no", "Unknown"),
         "start": fields.get("start", "Unknown"),
         "end": fields.get("end", "Unknown"),
-        "vehicle_no": vehicle_no,
+        "vehicle": fields.get("vehicle", "Unknown"),
+        "plate_no": fields.get("plate_no", "Unknown"),
+        "insurer": fields.get("insurer", "Unknown"),
         "reminder_set": True
     }
 
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    st.success(f"✅ Document saved and parsed for `{vehicle_no}`")
+    st.success(f"✅ Parsed and saved for `{vehicle_id}`")
     st.write("**Extracted Fields:**")
     st.json(metadata["insurance"])
 
 elif submit and not uploaded_file:
-    st.error("Please upload a document.")
+    st.error("Please upload a photo of the insurance document.")
