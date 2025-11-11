@@ -1,26 +1,9 @@
-import os
-import json
 import streamlit as st
 from google.cloud import documentai_v1beta3 as documentai
 from google.oauth2 import service_account
 
-# Load service account from Streamlit secrets
-service_account_info = {
-    "type": st.secrets["gcs"]["type"],
-    "project_id": st.secrets["gcs"]["project_id"],
-    "private_key_id": st.secrets["gcs"]["private_key_id"],
-    "private_key": st.secrets["gcs"]["private_key"],
-    "client_email": st.secrets["gcs"]["client_email"],
-    "client_id": st.secrets["gcs"]["client_id"],
-    "auth_uri": st.secrets["gcs"]["auth_uri"],
-    "token_uri": st.secrets["gcs"]["token_uri"],
-    "auth_provider_x509_cert_url": st.secrets["gcs"]["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": st.secrets["gcs"]["client_x509_cert_url"],
-    "universe_domain": st.secrets["gcs"]["universe_domain"]
-}
-
-# Authenticate using service account
-credentials = service_account.Credentials.from_service_account_info(service_account_info)
+# Load credentials from Streamlit secrets
+credentials = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
 client = documentai.DocumentProcessorServiceClient(credentials=credentials)
 
 # Define processor details
