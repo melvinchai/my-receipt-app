@@ -6,6 +6,8 @@ import os
 from io import BytesIO
 from datetime import datetime
 from google.cloud import storage
+from PIL import Image
+import fitz  # PyMuPDF
 
 # --- CONFIG ---
 BUCKET_NAME = "receipt-upload-bucket-mc"
@@ -34,6 +36,26 @@ if not uploaded_file:
 
 file_bytes = uploaded_file.read()
 base64_doc = base64.b64encode(file_bytes).decode("utf-8")
+
+# --- Display preview ---
+st.subheader("🖼️ Document Preview")
+file_ext = uploaded_file.name.lower().split(".")[-1]
+
+if file_ext == "pdf":
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(dpi=150)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        st.image(img, caption="Page 1 of PDF", use_column_width=True)
+    except Exception as e:
+        st.warning("Could not render PDF preview.")
+else:
+    try:
+        img = Image.open(BytesIO(file_bytes))
+        st.image(img, caption=uploaded_file.name, use_column_width=True)
+    except Exception as e:
+        st.warning("Could not render image preview.")
 
 # --- Claude prompt ---
 fields = schema_df[schema_df["Document Type"] == selected_type]
@@ -71,12 +93,29 @@ if st.button("🔍 Parse Document"):
         parsed_json = eval(parsed) if isinstance(parsed, str) else parsed
 
         actual_type = parsed_json.get("document_type", "Unknown")
-        fields_data = parsed_json.get("fields", [])
+        raw_fields = parsed_json.get("fields", [])
+        normalized_fields = []
 
-        st.subheader(f"📄 Detected Document Type: `{actual_type}`")
-        df = pd.DataFrame(fields_data)
+        for item in raw_fields:
+            if isinstance(item, dict) and "name" in item and "value" in item:
+                normalized_fields.append({
+                    "name": item["name"],
+                    "value": item["value"],
+                    "confidence": item.get("confidence", 0.0)
+                })
+            else:
+                for k, v in item.items():
+                    normalized_fields.append({
+                        "name": k,
+                        "value": v,
+                        "confidence": 0.0
+                    })
+
+        df = pd.DataFrame(normalized_fields)
         df["value"] = df["value"].astype(str)
         df["confidence"] = df["confidence"].astype(float)
+
+        st.subheader(f"📄 Detected Document Type: `{actual_type}`")
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
         if st.button("✅ Confirm and Submit"):
@@ -93,10 +132,10 @@ if st.button("🔍 Parse Document"):
             # --- Update inventory ---
             new_row = {
                 "Document Type": actual_type,
-                "Document Number": next((f["value"] for f in fields_data if "number" in f["name"].lower()), ""),
+                "Document Number": next((f["value"] for f in normalized_fields if "number" in f["name"].lower()), ""),
                 "Upload Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            for f in fields_data:
+            for f in normalized_fields:
                 new_row[f["name"]] = f["value"]
 
             if os.path.exists(INVENTORY_FILE):
