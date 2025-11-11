@@ -11,17 +11,18 @@ from google.cloud import storage
 BUCKET_NAME = "receipt-upload-bucket-mc"
 TOKEN = "99"
 INVENTORY_FILE = "master_inventory.xlsx"
+SCHEMA_FILE = "field_schema.xlsx"
 
 st.set_page_config(page_title="Claude Document Parser", layout="wide")
 st.title("📄 Claude-Powered Business Document Parser")
 
-# --- Upload schema ---
-schema_file = st.file_uploader("Upload field schema (Excel)", type=["xlsx"])
-if not schema_file:
-    st.warning("Please upload your field_schema.xlsx to proceed.")
+# --- Load schema from repo ---
+try:
+    schema_df = pd.read_excel(SCHEMA_FILE)
+except Exception as e:
+    st.error("⚠️ Could not load field_schema.xlsx from repo. Please make sure it's in the root folder.")
     st.stop()
 
-schema_df = pd.read_excel(schema_file)
 doc_types = sorted(schema_df["Document Type"].unique())
 default_type = "Receipt"
 selected_type = st.selectbox("Select expected document type", options=[default_type] + doc_types)
