@@ -1,14 +1,17 @@
 import streamlit as st
 import json
-import os
 from google.cloud import documentai_v1beta3 as documentai
 from google.oauth2 import service_account
 
-# Write secrets to a temporary JSON file
-with open("temp_service_account.json", "w") as f:
-    json.dump(st.secrets["gcs"], f)
+# Safely convert multiline private_key to JSON-safe format
+service_account_info = dict(st.secrets["gcs"])
+service_account_info["private_key"] = service_account_info["private_key"].replace("\n", "\\n")
 
-# Load credentials from the temp file
+# Write to temp file
+with open("temp_service_account.json", "w") as f:
+    json.dump(service_account_info, f)
+
+# Load credentials from temp file
 credentials = service_account.Credentials.from_service_account_file("temp_service_account.json")
 client = documentai.DocumentProcessorServiceClient(credentials=credentials)
 
