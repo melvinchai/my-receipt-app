@@ -3,15 +3,16 @@ import json
 from google.cloud import documentai_v1beta3 as documentai
 from google.oauth2 import service_account
 
-# Safely convert multiline private_key to JSON-safe format
+# Safely restore real newlines in private_key
 service_account_info = dict(st.secrets["gcs"])
-service_account_info["private_key"] = service_account_info["private_key"].replace("\n", "\\n")
+if "\\n" in service_account_info["private_key"]:
+    service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 
-# Write to temp file
+# Write to temporary JSON file
 with open("temp_service_account.json", "w") as f:
     json.dump(service_account_info, f)
 
-# Load credentials from temp file
+# Load credentials from file
 credentials = service_account.Credentials.from_service_account_file("temp_service_account.json")
 client = documentai.DocumentProcessorServiceClient(credentials=credentials)
 
