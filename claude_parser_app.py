@@ -75,4 +75,30 @@ def upload_to_gcs(file_name, file_bytes):
         bucket = client.bucket(BUCKET_NAME)
         blob = bucket.blob(file_name)
         blob.upload_from_string(file_bytes)
-        logger.debug("Uploaded %s to GCS bucket %s", file_name,
+        logger.debug("Uploaded %s to GCS bucket %s", file_name, BUCKET_NAME)
+        return f"gs://{BUCKET_NAME}/{file_name}"
+    except Exception as e:
+        logger.error("Upload failed: %s", e)
+        return {"error": str(e)}
+
+# === STREAMLIT APP ENTRYPOINT ===
+def main():
+    st.title("Claude Parser App")
+
+    schema = load_schema()
+
+    uploaded_file = st.file_uploader("Upload a document", type=["pdf", "png", "jpg", "jpeg"])
+    if uploaded_file:
+        preview_document(uploaded_file)
+
+        # Read file bytes for upload
+        file_bytes = uploaded_file.getvalue()
+        gcs_path = upload_to_gcs(uploaded_file.name, file_bytes)
+        st.write(f"Uploaded to: {gcs_path}")
+
+        # Simulate Claude parsing
+        parsed_output = parse_with_claude(file_bytes, schema)
+        st.json(parsed_output)
+
+if __name__ == "__main__":
+    main()
