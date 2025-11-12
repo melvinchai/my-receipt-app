@@ -3,30 +3,36 @@ import re
 import base64
 import io
 import json
+import time
 import streamlit as st
-from google.cloud import storage, vision
 from google.oauth2 import service_account
-from google.api_core.exceptions import GoogleAPIError
 import anthropic
 
-# Streamlit UI
-st.set_page_config(page_title="Claude Parser", layout="centered")
-st.title("Claude Receipt Parser - Traces Enabled")
+# Optional google storage import (app still runs without it; upload skipped)
+try:
+    from google.cloud import storage as gcs_mod
+    STORAGE_AVAILABLE = True
+except Exception:
+    gcs_mod = None
+    STORAGE_AVAILABLE = False
 
-# Load top-level secrets
+st.set_page_config(page_title="Claude Parser — Direct Parse", layout="centered")
+st.title("Claude Receipt Parser — Direct Parse then Review")
+
+# -----------------------------
+# Config / secrets
+# -----------------------------
 CLAUDE_API_KEY = st.secrets.get("claudeparser-key")
 GCS_BUCKET = st.secrets.get("GCS_BUCKET")
 PROJECT_ID = st.secrets.get("GOOGLE_CLOUD_PROJECT")
+RAW_GCS = st.secrets.get("gcs")
 
 if not CLAUDE_API_KEY:
     st.error("Missing Claude API key in secrets (claudeparser-key).")
     st.stop()
-if not PROJECT_ID or not GCS_BUCKET:
-    st.error("Missing GCS project or bucket in secrets.")
-    st.stop()
 
 # -----------------------------
-# Helper: sanitize private_key into canonical PEM
+# PEM sanitizer (robust)
 # -----------------------------
 def sanitize_pem(raw: str) -> str:
     if not isinstance(raw, str):
@@ -47,105 +53,57 @@ def sanitize_pem(raw: str) -> str:
     if not body_lines:
         raise ValueError("PEM body empty after cleaning")
     canonical = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(body_lines) + "\n-----END PRIVATE KEY-----"
-    try:
-        base64.b64decode("".join(body_lines), validate=True)
-    except Exception as e:
-        raise ValueError(f"PEM body failed base64 validation: {e}")
+    base64.b64decode("".join(body_lines), validate=True)
     return canonical
 
 # -----------------------------
-# Build service account dict from secrets
+# Optional: build GCS credentials (only if secrets present)
 # -----------------------------
-raw_gcs = st.secrets.get("gcs")
-if not raw_gcs:
-    st.error("Missing [gcs] block in secrets.toml")
-    st.stop()
+gcs_info = None
+gcs_credentials = None
+storage_client = None
+if RAW_GCS:
+    try:
+        cleaned_key = sanitize_pem(RAW_GCS.get("private_key", ""))
+        gcs_info = {
+            "type": RAW_GCS.get("type"),
+            "project_id": RAW_GCS.get("project_id"),
+            "private_key_id": RAW_GCS.get("private_key_id"),
+            "private_key": cleaned_key,
+            "client_email": RAW_GCS.get("client_email"),
+            "client_id": RAW_GCS.get("client_id"),
+            "auth_uri": RAW_GCS.get("auth_uri"),
+            "token_uri": RAW_GCS.get("token_uri"),
+            "auth_provider_x509_cert_url": RAW_GCS.get("auth_provider_x509_cert_url"),
+            "client_x509_cert_url": RAW_GCS.get("client_x509_cert_url"),
+            "universe_domain": RAW_GCS.get("universe_domain"),
+        }
+        gcs_credentials = service_account.Credentials.from_service_account_info(gcs_info)
+        if STORAGE_AVAILABLE and PROJECT_ID:
+            storage_client = gcs_mod.Client(project=PROJECT_ID, credentials=gcs_credentials)
+    except Exception as e:
+        st.warning("GCS credentials build failed; GCS upload will be skipped.")
+        st.exception(e)
+        gcs_info = None
 
-try:
-    cleaned_key = sanitize_pem(raw_gcs.get("private_key", ""))
-except Exception as e:
-    st.error("Private key sanitize failed")
-    st.exception(e)
-    st.stop()
-
-gcs_info = {
-    "type": raw_gcs.get("type"),
-    "project_id": raw_gcs.get("project_id"),
-    "private_key_id": raw_gcs.get("private_key_id"),
-    "private_key": cleaned_key,
-    "client_email": raw_gcs.get("client_email"),
-    "client_id": raw_gcs.get("client_id"),
-    "auth_uri": raw_gcs.get("auth_uri"),
-    "token_uri": raw_gcs.get("token_uri"),
-    "auth_provider_x509_cert_url": raw_gcs.get("auth_provider_x509_cert_url"),
-    "client_x509_cert_url": raw_gcs.get("client_x509_cert_url"),
-    "universe_domain": raw_gcs.get("universe_domain"),
-}
-
-# -----------------------------
-# Detailed runtime traces (helpful during debugging)
-# -----------------------------
-st.header("Runtime traces and credential inspection")
-
-# Print top-level secret keys present
+# Traces (helpful during testing)
 st.write("Secrets keys present:", sorted(list(st.secrets.keys())))
-# Print which client_email we will use
-sa_email = raw_gcs.get("client_email")
-st.write("Service account in secrets (client_email):", sa_email)
-st.write("GCS_BUCKET from secrets:", GCS_BUCKET)
-st.write("GOOGLE_CLOUD_PROJECT from secrets:", PROJECT_ID)
-
-# Show start and end of cleaned private key (non-sensitive preview)
-st.write("private_key head (preview):", cleaned_key[:80])
-st.write("private_key tail (preview):", cleaned_key[-80:])
+if gcs_info:
+    st.write("Service account in secrets (client_email):", gcs_info.get("client_email"))
+    st.write("GCS_BUCKET:", GCS_BUCKET)
+    st.write("Storage client available:", bool(storage_client))
 
 # -----------------------------
-# Create credentials and clients
+# Initialize Claude client and probe models
 # -----------------------------
-try:
-    gcs_credentials = service_account.Credentials.from_service_account_info(gcs_info)
-    st.success("Built service account credentials object from secrets")
-except Exception as exc:
-    st.error("Failed to build GCS credentials from service account info.")
-    st.exception(exc)
-    st.stop()
-
-# Show some attributes of the credentials object
-try:
-    st.write("Credentials service_account_email:", getattr(gcs_credentials, "service_account_email", None))
-    st.write("Credentials project_id:", getattr(gcs_credentials, "project_id", None))
-    st.write("Credentials token_uri:", getattr(gcs_credentials, "token_uri", None))
-except Exception:
-    pass
-
-# Initialize clients and report initialization status
-try:
-    storage_client = storage.Client(project=PROJECT_ID, credentials=gcs_credentials)
-    st.success("Initialized storage client")
-except Exception as exc:
-    st.error("Failed to initialize storage client.")
-    st.exception(exc)
-    st.stop()
-
-try:
-    vision_client = vision.ImageAnnotatorClient(credentials=gcs_credentials)
-    st.success("Initialized vision client")
-except Exception as exc:
-    st.error("Failed to initialize Vision client.")
-    st.exception(exc)
-    vision_client = None
-
 try:
     claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     st.success("Initialized Claude client")
-except Exception as exc:
+except Exception as e:
     st.error("Failed to initialize Claude client.")
-    st.exception(exc)
+    st.exception(e)
     st.stop()
 
-# -----------------------------
-# Model probe (try a short list)
-# -----------------------------
 MODEL_CANDIDATES = ["claude-haiku-4-5", "claude-3.11", "claude-3.1", "claude-2", "claude-instant"]
 working_model = None
 probe_exc = None
@@ -161,7 +119,7 @@ for m in MODEL_CANDIDATES:
         except Exception:
             probe_text = probe_resp
         st.success(f"Claude OK with model: {m}")
-        st.write("Claude probe response (raw):", probe_text)
+        st.write("Probe response:", probe_text)
         working_model = m
         break
     except Exception as e:
@@ -172,121 +130,111 @@ if not working_model:
     st.exception(probe_exc)
 
 # -----------------------------
-# Upload UI and traced GCS operations
+# Helpers: base64 encode, call Claude, parse defensive
+# -----------------------------
+def encode_file_to_base64(bytes_in: bytes) -> str:
+    return base64.b64encode(bytes_in).decode("ascii")
+
+def call_claude_with_base64_file(model: str, b64data: str, filename: str) -> str:
+    prompt = f"""
+You are a strict JSON extractor. The following is a base64-encoded file named {filename}. Decode it and extract:
+- merchant_name (string or null)
+- date (ISO 8601 date string YYYY-MM-DD or null)
+- total (number or null)
+- currency (3-letter code or null)
+- reference_number (string or null)
+
+Return a single line containing only valid JSON and nothing else. Use null when unknown.
+
+Base64 file:
+{b64data}
+"""
+    resp = claude_client.messages.create(
+        model=model,
+        max_tokens=800,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    try:
+        return getattr(resp.content[0], "text", None) or resp.content
+    except Exception:
+        return resp
+
+def robust_json_parse(s: str):
+    try:
+        return json.loads(s)
+    except Exception:
+        m = re.search(r"\{.*\}", s, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return None
+    return None
+
+# -----------------------------
+# File upload UI and review flow
 # -----------------------------
 uploaded_file = st.file_uploader("Upload a receipt image or PDF", type=["jpg", "jpeg", "png", "pdf"])
-
-if uploaded_file is not None:
+if uploaded_file is None:
+    st.info("Upload a file to test Claude-only parsing.")
+else:
     st.write("File uploaded:", uploaded_file.name)
     uploaded_bytes = uploaded_file.getvalue()
+    st.write("File size (bytes):", len(uploaded_bytes))
 
-    # Re-check working model before parsing
-    if working_model:
-        try:
-            resp = claude_client.messages.create(
-                model=working_model,
-                max_tokens=20,
-                messages=[{"role": "user", "content": "Respond with OK"}]
-            )
-            reply = getattr(resp.content[0], "text", None) or resp.content
-            st.write("Claude reply:", reply)
-        except Exception as e:
-            st.error("Claude call failed.")
-            st.exception(e)
-
-    # Defensive GCS: attempt to get bucket with extended trace of the exception
-    bucket = None
-    try:
-        st.write("Attempting storage_client.get_bucket(...) now...")
-        bucket = storage_client.get_bucket(GCS_BUCKET)
-        st.success("storage_client.get_bucket succeeded")
-        st.write("Bucket name returned:", getattr(bucket, "name", None))
-        # sample objects
-        try:
-            blobs = [b.name for b in bucket.list_blobs(max_results=5)]
-            st.write("Sample objects:", blobs)
-        except Exception as list_exc:
-            st.error("bucket.list_blobs failed")
-            st.exception(list_exc)
-    except Exception as e:
-        st.error("GCS bucket access failed on get_bucket.")
-        st.exception(e)
-        # Attempt to extract helpful pieces from the exception for debugging
-        try:
-            st.write("Exception type:", type(e).__name__)
-            # some google exceptions include .errors or .response
-            if hasattr(e, "errors"):
-                st.write("e.errors:", e.errors)
-            if hasattr(e, "response"):
-                st.write("e.response:", getattr(e, "response", None))
-            if hasattr(e, "message"):
-                st.write("e.message:", getattr(e, "message", None))
-        except Exception:
-            pass
-
-    # If bucket is available, run the upload using your known-good pattern
-    if bucket:
-        try:
-            st.write("Uploading file using uploads/<filename> path...")
-            blob = bucket.blob(f"uploads/{uploaded_file.name}")
-            # if we have bytes, use upload_from_string to avoid file-like issues
-            blob.upload_from_string(uploaded_bytes, content_type=uploaded_file.type)
-            st.success(f"Uploaded file to gs://{GCS_BUCKET}/uploads/{uploaded_file.name}")
-        except Exception as up_e:
-            st.error("Upload to GCS failed after bucket access succeeded.")
-            st.exception(up_e)
+    if not working_model:
+        st.error("No working Claude model available; cannot run extraction.")
     else:
-        st.info("Skipping upload because bucket is not accessible. See get_bucket exception details above.")
+        b64 = encode_file_to_base64(uploaded_bytes)
+        # Optional: warn and truncate extremely large base64 strings if you wish
+        st.write("Base64 length (chars):", len(b64))
+        st.info("Sending base64 payload to Claude for extraction (short tests only).")
+        try:
+            claude_raw = call_claude_with_base64_file(working_model, b64, uploaded_file.name)
+            st.subheader("Claude extraction (raw)")
+            st.code(claude_raw)
+        except Exception as e:
+            st.error("Claude extraction failed.")
+            st.exception(e)
+            claude_raw = None
 
-    # Optional: run OCR + Claude extraction only if you want to exercise parsing locally
-    run_parse = st.checkbox("Run OCR + Claude extraction now", value=False)
-    if run_parse:
-        # Initialize vision client check
-        if not vision_client:
-            st.error("Vision client not initialized; cannot OCR.")
-        else:
+    # Reviewer UI: parse attempt and buttons
+    parsed = robust_json_parse(claude_raw) if claude_raw else None
+    st.subheader("Parsed (best-effort)")
+    if parsed and isinstance(parsed, dict):
+        st.json(parsed)
+    else:
+        st.warning("Could not parse valid JSON from Claude output. Reviewer may still approve or reject using raw text.")
+
+    col1, col2 = st.columns(2)
+    approve = col1.button("Approve and store")
+    reject = col2.button("Reject (discard)")
+
+    if reject:
+        st.info("File discarded (not stored).")
+    if approve:
+        # upload only if storage_client is available and GCS_BUCKET configured
+        if storage_client and GCS_BUCKET:
             try:
-                image = vision.Image(content=uploaded_bytes)
-                vresp = vision_client.text_detection(image=image)
-                if vresp.error.message:
-                    raise GoogleAPIError(vresp.error.message)
-                ocr_text = vresp.full_text_annotation.text if vresp.full_text_annotation and vresp.full_text_annotation.text else ""
-                st.write("OCR text length:", len(ocr_text))
-            except Exception as ocr_exc:
-                st.error("OCR failed.")
-                st.exception(ocr_exc)
-                ocr_text = ""
+                bucket = storage_client.get_bucket(GCS_BUCKET)
+                blob = bucket.blob(f"accepted/{uploaded_file.name}")
+                blob.upload_from_string(uploaded_bytes, content_type=uploaded_file.type)
+                parsed_payload = parsed if parsed else {"raw_extraction": claude_raw}
+                meta_blob = bucket.blob(f"accepted/{uploaded_file.name}.json")
+                meta_blob.upload_from_string(json.dumps(parsed_payload), content_type="application/json")
+                audit = {
+                    "approved_by": st.session_state.get("user_id", "manual_test"),
+                    "timestamp": int(time.time()),
+                    "model": working_model,
+                    "file": f"accepted/{uploaded_file.name}"
+                }
+                audit_blob = bucket.blob(f"accepted/{uploaded_file.name}.audit.json")
+                audit_blob.upload_from_string(json.dumps(audit), content_type="application/json")
+                st.success(f"Uploaded file and JSON to gs://{GCS_BUCKET}/accepted/{uploaded_file.name}")
+            except Exception as e:
+                st.error("GCS upload failed.")
+                st.exception(e)
+        else:
+            st.warning("Storage client or GCS_BUCKET not available. To persist approved files, configure GCS credentials in secrets and redeploy.")
 
-            if working_model and ocr_text:
-                try:
-                    prompt = f"""
-You are a strict JSON extractor. Given the raw OCR text of a receipt, return a single JSON object with the following keys:
-merchant_name, date (YYYY-MM-DD), total (number), currency (3-letter) and reference_number.
-Only output valid JSON and nothing else.
-
-OCR:
-\"\"\"{ocr_text}\"\"\"
-"""
-                    cresp = claude_client.messages.create(model=working_model, max_tokens=600,
-                                                         messages=[{"role": "user", "content": prompt}])
-                    ctext = getattr(cresp.content[0], "text", None) or cresp.content
-                    st.subheader("Claude extraction (raw)")
-                    st.code(ctext)
-                    parsed = None
-                    try:
-                        parsed = json.loads(ctext)
-                    except Exception:
-                        m = re.search(r"\{.*\}", ctext, re.S)
-                        if m:
-                            try:
-                                parsed = json.loads(m.group(0))
-                            except Exception:
-                                parsed = None
-                    st.subheader("Parsed extraction")
-                    if parsed and isinstance(parsed, dict):
-                        st.json(parsed)
-                    else:
-                        st.warning("Could not parse JSON from Claude output. See raw output above.")
-                except Exception as ce:
-                    st.error("Claude extraction failed.")
-                    st.exception(ce)
+    st.info("When parsing quality is acceptable we can switch to a multimodal endpoint or reintroduce OCR for production reliability.")
