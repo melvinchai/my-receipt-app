@@ -20,11 +20,14 @@ logger = logging.getLogger("claude_parser")
 SCHEMA_PATH = Path("schemas/default_schema.json")
 BUCKET_NAME = st.secrets["GCS_BUCKET"]
 PROJECT_ID = st.secrets["GOOGLE_CLOUD_PROJECT"]
-GCS_CREDENTIALS = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
+
+# Decode private key correctly
+raw_info = dict(st.secrets["gcs"])
+raw_info["private_key"] = raw_info["private_key"].replace("\\n", "\n")
+GCS_CREDENTIALS = service_account.Credentials.from_service_account_info(raw_info)
 
 # === UTILITIES ===
 def load_schema():
-    """Automatic schema loading from repo asset."""
     try:
         with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
             schema = json.load(f)
@@ -35,7 +38,6 @@ def load_schema():
         return {}
 
 def preview_document(uploaded_file):
-    """Preview PDF or image in Streamlit, vertically stacked with correct orientation."""
     try:
         if uploaded_file.type == "application/pdf":
             reader = PdfReader(uploaded_file)
@@ -54,10 +56,8 @@ def preview_document(uploaded_file):
         st.error("Could not preview document.")
 
 def parse_with_claude(content, schema):
-    """Claude parsing with fallback normalization."""
     try:
-        # Placeholder for Claude API call
-        parsed = {"raw": "claude_output_here"}  # simulate
+        parsed = {"raw": "claude_output_here"}  # placeholder
         logger.debug("Claude raw output: %s", parsed)
 
         if not isinstance(parsed, dict):
@@ -72,7 +72,6 @@ def parse_with_claude(content, schema):
         return {"error": str(e)}
 
 def upload_to_gcs(file_name, file_bytes):
-    """Upload file to GCS and track inventory."""
     try:
         client = storage.Client(project=PROJECT_ID, credentials=GCS_CREDENTIALS)
         bucket = client.bucket(BUCKET_NAME)
