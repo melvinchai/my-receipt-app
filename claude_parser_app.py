@@ -8,7 +8,7 @@ import streamlit as st
 from google.oauth2 import service_account
 import anthropic
 
-# Optional google storage import (app still runs without it; upload skipped)
+# Optional google storage import (app runs without it; upload skipped if unavailable)
 try:
     from google.cloud import storage as gcs_mod
     STORAGE_AVAILABLE = True
@@ -32,39 +32,61 @@ if not CLAUDE_API_KEY:
     st.stop()
 
 # -----------------------------
-# PEM sanitizer (robust)
+# Hardened PEM sanitizer (tolerant but safe)
 # -----------------------------
-def sanitize_pem(raw: str) -> str:
+def sanitize_pem_hardened(raw: str) -> str:
     if not isinstance(raw, str):
         raise TypeError("private_key must be a string")
+
     s = raw.replace("\\n", "\n").strip()
+
+    # Remove accidental surrounding quotes
     if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
         s = s[1:-1].strip()
-    start = s.find("-----BEGIN PRIVATE KEY-----")
-    end = s.find("-----END PRIVATE KEY-----")
-    if start == -1 or end == -1:
-        raise ValueError("PEM header/footer not found")
-    body = s[start + len("-----BEGIN PRIVATE KEY-----"):end]
-    body_lines = []
-    for line in body.splitlines():
-        cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", line)
-        if cleaned:
-            body_lines.append(cleaned)
-    if not body_lines:
-        raise ValueError("PEM body empty after cleaning")
-    canonical = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(body_lines) + "\n-----END PRIVATE KEY-----"
-    base64.b64decode("".join(body_lines), validate=True)
+
+    if "-----BEGIN PRIVATE KEY-----" not in s or "-----END PRIVATE KEY-----" not in s:
+        raise ValueError("PEM header/footer not found; ensure the private_key in secrets contains full PEM")
+
+    m = re.search(r"-----BEGIN PRIVATE KEY-----(.*)-----END PRIVATE KEY-----", s, re.S)
+    if not m:
+        raise ValueError("PEM parse failed; check quoting/newlines in secrets")
+
+    body_raw = m.group(1)
+    # Remove whitespace and non-base64 characters
+    body_compact = re.sub(r"\s+", "", body_raw)
+    body_clean = re.sub(r"[^A-Za-z0-9+/=]", "", body_compact)
+
+    # If cleaning removed characters, keep the user informed
+    if len(body_clean) != len(body_compact):
+        st.warning("PEM body contained unexpected characters; attempting safe repair")
+
+    # If length mod 4 != 0, attempt to add '=' padding (only padding; do not truncate)
+    rem = len(body_clean) % 4
+    if rem != 0:
+        pad = 4 - rem
+        st.warning(f"PEM body length not multiple of 4; adding {pad} '=' padding characters for validation")
+        body_clean = body_clean + ("=" * pad)
+
+    # Validate base64
+    try:
+        base64.b64decode(body_clean, validate=True)
+    except Exception as e:
+        raise ValueError(f"PEM base64 validation failed after cleaning: {e}")
+
+    # Reflow into canonical 64-char lines
+    lines = [body_clean[i:i+64] for i in range(0, len(body_clean), 64)]
+    canonical = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END PRIVATE KEY-----"
     return canonical
 
 # -----------------------------
-# Optional: build GCS credentials (only if secrets present)
+# Build optional GCS credentials
 # -----------------------------
 gcs_info = None
 gcs_credentials = None
 storage_client = None
 if RAW_GCS:
     try:
-        cleaned_key = sanitize_pem(RAW_GCS.get("private_key", ""))
+        cleaned_key = sanitize_pem_hardened(RAW_GCS.get("private_key", ""))
         gcs_info = {
             "type": RAW_GCS.get("type"),
             "project_id": RAW_GCS.get("project_id"),
@@ -86,12 +108,16 @@ if RAW_GCS:
         st.exception(e)
         gcs_info = None
 
-# Traces (helpful during testing)
+# -----------------------------
+# Traces (non-sensitive)
+# -----------------------------
 st.write("Secrets keys present:", sorted(list(st.secrets.keys())))
 if gcs_info:
     st.write("Service account in secrets (client_email):", gcs_info.get("client_email"))
     st.write("GCS_BUCKET:", GCS_BUCKET)
     st.write("Storage client available:", bool(storage_client))
+else:
+    st.info("GCS not configured or invalid; approved uploads will be skipped until fixed.")
 
 # -----------------------------
 # Initialize Claude client and probe models
@@ -130,7 +156,7 @@ if not working_model:
     st.exception(probe_exc)
 
 # -----------------------------
-# Helpers: base64 encode, call Claude, parse defensive
+# Helpers: base64 encode, call Claude, robust parse
 # -----------------------------
 def encode_file_to_base64(bytes_in: bytes) -> str:
     return base64.b64encode(bytes_in).decode("ascii")
@@ -160,6 +186,8 @@ Base64 file:
         return resp
 
 def robust_json_parse(s: str):
+    if not s:
+        return None
     try:
         return json.loads(s)
     except Exception:
@@ -185,8 +213,8 @@ else:
     if not working_model:
         st.error("No working Claude model available; cannot run extraction.")
     else:
+        # Base64 encode (for short tests). For larger setups consider a multimodal endpoint.
         b64 = encode_file_to_base64(uploaded_bytes)
-        # Optional: warn and truncate extremely large base64 strings if you wish
         st.write("Base64 length (chars):", len(b64))
         st.info("Sending base64 payload to Claude for extraction (short tests only).")
         try:
@@ -198,7 +226,6 @@ else:
             st.exception(e)
             claude_raw = None
 
-    # Reviewer UI: parse attempt and buttons
     parsed = robust_json_parse(claude_raw) if claude_raw else None
     st.subheader("Parsed (best-effort)")
     if parsed and isinstance(parsed, dict):
@@ -213,15 +240,17 @@ else:
     if reject:
         st.info("File discarded (not stored).")
     if approve:
-        # upload only if storage_client is available and GCS_BUCKET configured
         if storage_client and GCS_BUCKET:
             try:
                 bucket = storage_client.get_bucket(GCS_BUCKET)
+                # store original file under accepted/<filename>
                 blob = bucket.blob(f"accepted/{uploaded_file.name}")
                 blob.upload_from_string(uploaded_bytes, content_type=uploaded_file.type)
+                # store extracted JSON (best-effort) as sibling file
                 parsed_payload = parsed if parsed else {"raw_extraction": claude_raw}
                 meta_blob = bucket.blob(f"accepted/{uploaded_file.name}.json")
                 meta_blob.upload_from_string(json.dumps(parsed_payload), content_type="application/json")
+                # store audit record
                 audit = {
                     "approved_by": st.session_state.get("user_id", "manual_test"),
                     "timestamp": int(time.time()),
