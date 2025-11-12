@@ -139,36 +139,3 @@ if menu == "Claude Parsing":
     schema_df = schemas[doc_type]
 
     uploaded = st.file_uploader("Upload file", type=["pdf","png","jpg","jpeg"])
-    if uploaded:
-        meta = preview(uploaded)
-
-        if st.button("Confirm & Parse"):
-            prompt = build_prompt(doc_type, schema_df)
-            content = meta["text"] if uploaded.type=="application/pdf" else "Image document."
-            raw = call_claude(prompt, content)
-            parsed = parse_json(raw)
-
-            if parsed:
-                st.success("Parsed fields:")
-                df = pd.DataFrame([{"field":k,"value":v} for k,v in parsed.items()])
-                st.dataframe(df)
-
-                if st.button("Submit"):
-                    # Upload original
-                    uri_img = upload_blob(uploaded.name, uploaded)
-                    # Upload parsed JSON
-                    parsed_name = f"{base_name(uploaded.name)}{PARSED_SUFFIX}"
-                    uri_parsed = upload_bytes(parsed_name, json.dumps(parsed,indent=2).encode())
-                    # Update inventory
-                    inv = read_inventory()
-                    new_row = {
-                        "fields": ", ".join(parsed.keys()),
-                        "date_uploaded": datetime.datetime.utcnow().isoformat(),
-                        "file_name": uploaded.name,
-                        "document_type": doc_type
-                    }
-                    inv = pd.concat([inv,pd.DataFrame([new_row])],ignore_index=True)
-                    write_inventory(inv)
-                    st.success("Uploaded and inventory updated.")
-                    st.write(uri_img)
-                    st.write(uri_parsed)
