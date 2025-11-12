@@ -4,7 +4,7 @@ import logging
 import streamlit as st
 from google.cloud import storage
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 from PyPDF2 import PdfReader
 
 # === TRACE LOGGING CONFIG ===
@@ -33,7 +33,7 @@ def load_schema():
         return {}
 
 def preview_document(uploaded_file):
-    """Preview PDF or image in Streamlit, vertically stacked."""
+    """Preview PDF or image in Streamlit, vertically stacked with correct orientation."""
     try:
         if uploaded_file.type == "application/pdf":
             reader = PdfReader(uploaded_file)
@@ -45,12 +45,15 @@ def preview_document(uploaded_file):
         else:
             image = Image.open(uploaded_file)
 
-            # Rotate image to ensure vertical orientation if needed
+            # Respect EXIF orientation to avoid upside-down rotation
+            image = ImageOps.exif_transpose(image)
+
+            # If still landscape, rotate once to make portrait
             if image.width > image.height:
                 image = image.rotate(90, expand=True)
 
-            st.image(image, caption="Uploaded Image Preview (Vertical)", use_column_width=True)
-            logger.debug("Image preview rendered vertically")
+            st.image(image, caption="Uploaded Image Preview (Correct Orientation)", use_column_width=True)
+            logger.debug("Image preview rendered with correct orientation")
     except Exception as e:
         logger.error("Preview failed: %s", e)
         st.error("Could not preview document.")
@@ -96,7 +99,7 @@ def main():
 
     uploaded_file = st.file_uploader("Upload a document", type=["pdf", "png", "jpg", "jpeg"])
     if uploaded_file:
-        # Vertical preview
+        # Vertical preview with correct orientation
         preview_document(uploaded_file)
 
         # Upload to GCS
