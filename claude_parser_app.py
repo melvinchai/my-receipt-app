@@ -111,10 +111,8 @@ def upload_to_gcs(local_path: str, dest_name: str):
 
 def flatten_result(filename: str, file_path: str, result: dict):
     """Extract key fields from Claude JSON into flat row."""
-    usage = result.get("usage", {})
     content = None
     if "content" in result and isinstance(result["content"], list):
-        # Claude responses often embed JSON in text
         for block in result["content"]:
             if block.get("type") == "text":
                 try:
@@ -145,22 +143,49 @@ def flatten_result(filename: str, file_path: str, result: dict):
         "loyalty_closing": content.get("loyalty_points", {}).get("closing_balance"),
         "line_items": str(content.get("line_items")),
     }
-    return row
+    return row, content
 
 def append_to_inventory(filename: str, file_path: str, result: dict):
     df = load_master_inventory()
-    row = flatten_result(filename, file_path, result)
-    if not row:
+    row_content = flatten_result(filename, file_path, result)
+    if not row_content:
         st.error("Could not flatten Claude response into schema.")
-        return df, False
+        return df, False, None
+    row, parsed_json = row_content
 
     if row["file_hash"] in df["file_hash"].values:
         st.warning("Duplicate receipt detected — not added to inventory.")
-        return df, False
+        return df, False, parsed_json
 
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     save_master_inventory(df)
-    return df, True
+    return df, True, parsed_json
+
+def display_receipt_json(receipt_json: dict):
+    """Render receipt JSON in a human-readable format inside Streamlit."""
+    st.subheader("🧾 Receipt Summary")
+    st.write(f"**Vendor:** {receipt_json.get('vendor_name')}")
+    st.write(f"**Store Location:** {receipt_json.get('store_location')}")
+    st.write(f"**Date:** {receipt_json.get('date')} {receipt_json.get('time')}")
+    st.write(f"**Currency:** {receipt_json.get('currency')}")
+    st.write(f"**Subtotal:** {receipt_json.get('subtotal')}")
+    st.write(f"**Rounding:** {receipt_json.get('rounding')}")
+    st.write(f"**Total Amount:** {receipt_json.get('total_amount')}")
+    st.write(f"**Payment Method:** {receipt_json.get('payment_method')}")
+    st.write(f"**Invoice Number:** {receipt_json.get('invoice_number')}")
+
+    if "loyalty_points" in receipt_json:
+        st.subheader("🎟️ Loyalty Information")
+        st.write(f"**Account:** {receipt_json.get('loyalty_account')}")
+        lp = receipt_json["loyalty_points"]
+        st.write(f"Opening Balance: {lp.get('opening_balance')}")
+        st.write(f"Earned: {lp.get('earned')}")
+        st.write(f"Closing Balance: {lp.get('closing_balance')}")
+
+    if "line_items" in receipt_json:
+        st.subheader("🛍️ Line Items")
+        df = pd.DataFrame(receipt_json["line_items"])
+        st.dataframe(df)
 
 # ========== UI ==========
 st.title(APP_TITLE)
@@ -178,39 +203,4 @@ You are an audit‑grade receipt parser. From the attached file, extract:
 Return a concise JSON object with these fields. If text is unclear, mark fields as null with a reason.
 """
 instruction = st.text_area("Parsing instruction", instruction_default, height=160)
-model = st.text_input("Claude model", MODEL_DEFAULT)
-run = st.button("Parse with Claude (Files API)")
-
-if run:
-    if uploaded_file is None:
-        st.error("Please upload a file first.")
-        st.stop()
-
-    size_bytes = len(uploaded_file.getbuffer())
-    st.write(f"Uploaded file size: {human_bytes(size_bytes)}")
-    if size_bytes > MAX_UPLOAD_MB * 1024 * 1024:
-        st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
-        st.stop()
-
-    with st.spinner("Saving file locally..."):
-        local_path = save_temp_file(uploaded_file)
-
-    with st.spinner("Uploading file to Anthropic..."):
-        try:
-            file_id = upload_file_to_anthropic(local_path, uploaded_file.name)
-            st.success(f"Uploaded to Anthropic, file_id: {file_id}")
-        except Exception as e:
-            st.error(f"Error uploading to Anthropic: {e}")
-            st.stop()
-
-    with st.spinner("Calling Claude with file reference..."):
-        try:
-            result = call_claude_with_file(model, file_id, instruction)
-            st.subheader("Claude response")
-            st.json(result)
-
-            if "usage" in result:
-                st.subheader("Token usage")
-                st.json(result["usage"])
-
-            if st.button("Confirm and
+model = st
