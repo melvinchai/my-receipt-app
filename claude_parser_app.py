@@ -15,11 +15,15 @@ CLAUDE_API_KEY = st.secrets["claudeparser-key"]
 GCS_BUCKET = st.secrets["GCS_BUCKET"]
 PROJECT_ID = st.secrets["GOOGLE_CLOUD_PROJECT"]
 
+# -----------------------------
 # Normalize private_key from triple-quoted TOML
+# -----------------------------
 gcs_info = dict(st.secrets["gcs"])
 if "private_key" in gcs_info:
-    # Strip stray whitespace and ensure proper PEM formatting
+    # Strip stray whitespace
     gcs_info["private_key"] = gcs_info["private_key"].strip()
+    # Convert escaped newlines if present
+    gcs_info["private_key"] = gcs_info["private_key"].replace("\\n", "\n")
 
 # Build credentials explicitly
 gcs_credentials = service_account.Credentials.from_service_account_info(gcs_info)
