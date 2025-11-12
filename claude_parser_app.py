@@ -209,4 +209,5 @@ def calculate_cost(model: str, usage: dict, credit_remaining: float):
     }
 
 # ========== UI ==========
-st
+st.title(APP_TITLE)
+st.caption("Upload
