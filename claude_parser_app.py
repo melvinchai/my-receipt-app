@@ -5,6 +5,7 @@ from PIL import Image, ImageOps
 from PyPDF2 import PdfReader
 import io, json, datetime
 import anthropic
+st.write("Claude key present:", "claudeparser-key" in st.secrets)
 
 # -----------------------------
 # Config
