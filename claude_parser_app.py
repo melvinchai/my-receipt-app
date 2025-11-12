@@ -6,6 +6,7 @@ from PyPDF2 import PdfReader
 import io, json, datetime
 import anthropic
 st.write("Claude key present:", "claudeparser-key" in st.secrets)
+st.write("Secrets keys:", list(st.secrets.keys()))
 
 # -----------------------------
 # Config
