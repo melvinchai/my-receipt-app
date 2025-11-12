@@ -18,6 +18,7 @@ logger = logging.getLogger("claude_parser")
 # === CONFIG ===
 SCHEMA_PATH = Path("schemas/default_schema.json")
 BUCKET_NAME = os.getenv("GCS_BUCKET", "my-doc-inventory")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 
 # === UTILITIES ===
 def load_schema():
@@ -32,18 +33,19 @@ def load_schema():
         return {}
 
 def preview_document(uploaded_file):
-    """Preview PDF or image in Streamlit."""
+    """Preview PDF or image in Streamlit, vertically stacked."""
     try:
         if uploaded_file.type == "application/pdf":
             reader = PdfReader(uploaded_file)
-            first_page = reader.pages[0]
-            text_preview = first_page.extract_text()
-            st.text_area("PDF Preview", text_preview[:1000])
-            logger.debug("PDF preview rendered")
+            for i, page in enumerate(reader.pages):
+                text_preview = page.extract_text()
+                if text_preview:
+                    st.text_area(f"PDF Page {i+1}", text_preview[:2000], height=300)
+            logger.debug("PDF preview rendered vertically")
         else:
             image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Image Preview")
-            logger.debug("Image preview rendered")
+            st.image(image, caption="Uploaded Image Preview", use_column_width=True)
+            logger.debug("Image preview rendered vertically")
     except Exception as e:
         logger.error("Preview failed: %s", e)
         st.error("Could not preview document.")
@@ -71,7 +73,7 @@ def parse_with_claude(content, schema):
 def upload_to_gcs(file_name, file_bytes):
     """Upload file to GCS and track inventory."""
     try:
-        client = storage.Client()
+        client = storage.Client(project=PROJECT_ID)
         bucket = client.bucket(BUCKET_NAME)
         blob = bucket.blob(file_name)
         blob.upload_from_string(file_bytes)
@@ -89,9 +91,10 @@ def main():
 
     uploaded_file = st.file_uploader("Upload a document", type=["pdf", "png", "jpg", "jpeg"])
     if uploaded_file:
+        # Vertical preview
         preview_document(uploaded_file)
 
-        # Read file bytes for upload
+        # Upload to GCS
         file_bytes = uploaded_file.getvalue()
         gcs_path = upload_to_gcs(uploaded_file.name, file_bytes)
         st.write(f"Uploaded to: {gcs_path}")
