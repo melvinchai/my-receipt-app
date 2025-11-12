@@ -10,7 +10,7 @@ from google.cloud import storage
 from google.oauth2 import service_account
 
 # ========== Config ==========
-APP_TITLE = "Claude Receipt Parser (Files API + Master Inventory in GCS)"
+APP_TITLE = "Claude Receipt Parser (Flattened Master Inventory in GCS)"
 BASE_URL = "https://api.anthropic.com/v1"
 MODEL_DEFAULT = "claude-haiku-4.5"
 MAX_UPLOAD_MB = 15
@@ -93,7 +93,12 @@ def load_master_inventory() -> pd.DataFrame:
         data = blob.download_as_bytes()
         return pd.read_csv(BytesIO(data))
     else:
-        return pd.DataFrame(columns=["timestamp","filename","file_hash","input_tokens","output_tokens","response_json"])
+        return pd.DataFrame(columns=[
+            "timestamp","filename","file_hash","vendor_name","store_location",
+            "date","time","currency","total_amount","subtotal","rounding",
+            "payment_method","invoice_number","loyalty_account",
+            "loyalty_opening","loyalty_earned","loyalty_closing","line_items"
+        ])
 
 def save_master_inventory(df: pd.DataFrame):
     blob = gcs_bucket.blob(MASTER_CSV_NAME)
@@ -104,29 +109,62 @@ def upload_to_gcs(local_path: str, dest_name: str):
     blob.upload_from_filename(local_path)
     return f"gs://{GCS_BUCKET}/{dest_name}"
 
-def append_to_inventory(filename: str, file_path: str, result: dict):
+def flatten_result(filename: str, file_path: str, result: dict):
+    """Extract key fields from Claude JSON into flat row."""
     usage = result.get("usage", {})
+    content = None
+    if "content" in result and isinstance(result["content"], list):
+        # Claude responses often embed JSON in text
+        for block in result["content"]:
+            if block.get("type") == "text":
+                try:
+                    import json
+                    content = json.loads(block["text"])
+                except Exception:
+                    pass
+    if not content:
+        return None
+
     row = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "filename": filename,
         "file_hash": file_hash(file_path),
-        "input_tokens": usage.get("input_tokens"),
-        "output_tokens": usage.get("output_tokens"),
-        "response_json": str(result),
+        "vendor_name": content.get("vendor_name"),
+        "store_location": content.get("store_location"),
+        "date": content.get("date"),
+        "time": content.get("time"),
+        "currency": content.get("currency"),
+        "total_amount": content.get("total_amount"),
+        "subtotal": content.get("subtotal"),
+        "rounding": content.get("rounding"),
+        "payment_method": content.get("payment_method"),
+        "invoice_number": content.get("invoice_number"),
+        "loyalty_account": content.get("loyalty_account"),
+        "loyalty_opening": content.get("loyalty_points", {}).get("opening_balance"),
+        "loyalty_earned": content.get("loyalty_points", {}).get("earned"),
+        "loyalty_closing": content.get("loyalty_points", {}).get("closing_balance"),
+        "line_items": str(content.get("line_items")),
     }
+    return row
 
+def append_to_inventory(filename: str, file_path: str, result: dict):
     df = load_master_inventory()
+    row = flatten_result(filename, file_path, result)
+    if not row:
+        st.error("Could not flatten Claude response into schema.")
+        return df, False
+
     if row["file_hash"] in df["file_hash"].values:
         st.warning("Duplicate receipt detected — not added to inventory.")
-        return df, False  # duplicate
+        return df, False
 
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     save_master_inventory(df)
-    return df, True  # new entry
+    return df, True
 
 # ========== UI ==========
 st.title(APP_TITLE)
-st.caption("Upload a receipt, parse with Claude, confirm to save unique results + image into GCS.")
+st.caption("Upload a receipt, parse with Claude, confirm to save unique flattened results + image into GCS.")
 
 uploaded_file = st.file_uploader("Upload a receipt image or PDF", type=ALLOWED_EXTS)
 
@@ -175,30 +213,4 @@ if run:
                 st.subheader("Token usage")
                 st.json(result["usage"])
 
-            if st.button("Confirm and save to master inventory"):
-                df, is_new = append_to_inventory(uploaded_file.name, local_path, result)
-                if is_new:
-                    try:
-                        dest_name = f"receipts/{uploaded_file.name}"
-                        gcs_uri = upload_to_gcs(local_path, dest_name)
-                        st.success(f"Result saved. Image also stored in GCS: {gcs_uri}")
-                    except Exception as e:
-                        st.warning(f"Image upload failed: {e}")
-                else:
-                    st.info("Duplicate detected — image not uploaded again.")
-
-                # Preview master inventory
-                st.subheader("Master Inventory Preview")
-                st.dataframe(df)
-
-                # Download master CSV
-                blob = gcs_bucket.blob(MASTER_CSV_NAME)
-                data = blob.download_as_bytes()
-                st.download_button(
-                    "Download master inventory CSV",
-                    data=data,
-                    file_name=MASTER_CSV_NAME,
-                    mime="text/csv",
-                )
-        except Exception as e:
-            st.error(f"Error calling Claude: {e}")
+            if st.button("Confirm and
