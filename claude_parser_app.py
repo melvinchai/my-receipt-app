@@ -1,104 +1,174 @@
-import os
-import json
-import logging
 import streamlit as st
 from google.cloud import storage
-from google.oauth2 import service_account
-from pathlib import Path
+import pandas as pd
 from PIL import Image, ImageOps
 from PyPDF2 import PdfReader
+import io, json, datetime
+import anthropic
 
-# === TRACE LOGGING CONFIG ===
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("claude_parser")
+# -----------------------------
+# Config
+# -----------------------------
+st.set_page_config(page_title="Claude Parser", layout="centered")
 
-# === CONFIG ===
-SCHEMA_PATH = Path("schemas/default_schema.json")
-BUCKET_NAME = st.secrets["GCS_BUCKET"]
+GCS_BUCKET = st.secrets["GCS_BUCKET"]
 PROJECT_ID = st.secrets["GOOGLE_CLOUD_PROJECT"]
+CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
 
-# Decode private key correctly
-raw_info = dict(st.secrets["gcs"])
-raw_info["private_key"] = raw_info["private_key"].replace("\\n", "\n")
-GCS_CREDENTIALS = service_account.Credentials.from_service_account_info(raw_info)
+storage_client = storage.Client(project=PROJECT_ID)
+claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-# === UTILITIES ===
-def load_schema():
+SCHEMA_FILE = "fields-schema.xlsx"
+INVENTORY_BLOB = "token-inventory.xlsx"
+PARSED_SUFFIX = "_parsed.json"
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def read_schema(path):
+    xl = pd.ExcelFile(path)
+    sheets = {}
+    for sheet in xl.sheet_names:
+        df = xl.parse(sheet)
+        df.columns = [c.strip().lower() for c in df.columns]
+        if "field_name" in df.columns:
+            sheets[sheet] = df
+    return sheets
+
+def build_prompt(doc_type, df):
+    fields = []
+    for _, row in df.iterrows():
+        fields.append({
+            "name": str(row.get("field_name", "")).strip(),
+            "description": str(row.get("description", "")),
+            "dtype": str(row.get("dtype", "string")),
+            "required": bool(row.get("required", False))
+        })
+    field_names = ", ".join([f["name"] for f in fields])
+    return f"""
+You are an extraction engine. Return STRICT JSON only.
+
+Document type: {doc_type}
+Fields: {json.dumps(fields, indent=2)}
+
+Return JSON with keys exactly: [{field_names}]
+"""
+
+def preview(uploaded_file):
+    meta = {"text": None}
+    if uploaded_file.type == "application/pdf":
+        reader = PdfReader(uploaded_file)
+        text = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            text.append(txt)
+        meta["text"] = "\n".join(text)[:5000]
+        st.text_area("PDF Preview", meta["text"], height=200)
+    else:
+        image = Image.open(uploaded_file)
+        image = ImageOps.exif_transpose(image)
+        st.image(image, caption="Selected image", use_column_width=True)
+    return meta
+
+def call_claude(prompt, content):
+    msg = claude_client.messages.create(
+        model="claude-3-opus-20240229",
+        max_tokens=1500,
+        messages=[
+            {"role": "system", "content": "Return strictly valid JSON."},
+            {"role": "user", "content": f"{prompt}\n\nDocument:\n{content}"}
+        ]
+    )
+    return msg.content[0].text
+
+def parse_json(raw):
     try:
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema = json.load(f)
-        logger.debug("Schema loaded successfully: %s", SCHEMA_PATH)
-        return schema
-    except Exception as e:
-        logger.error("Schema load failed: %s", e)
-        return {}
+        return json.loads(raw)
+    except:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end != -1:
+            return json.loads(raw[start:end+1])
+    return {}
 
-def preview_document(uploaded_file):
-    try:
-        if uploaded_file.type == "application/pdf":
-            reader = PdfReader(uploaded_file)
-            for i, page in enumerate(reader.pages):
-                text_preview = page.extract_text()
-                if text_preview:
-                    st.text_area(f"PDF Page {i+1}", text_preview[:2000], height=300)
-            logger.debug("PDF preview rendered vertically")
-        else:
-            image = Image.open(uploaded_file)
-            image = ImageOps.exif_transpose(image)
-            st.image(image, caption="Uploaded Image Preview", use_column_width=True)
-            logger.debug("Image preview rendered with correct orientation")
-    except Exception as e:
-        logger.error("Preview failed: %s", e)
-        st.error("Could not preview document.")
+def upload_blob(name, fileobj):
+    bucket = storage_client.bucket(GCS_BUCKET)
+    blob = bucket.blob(name)
+    fileobj.seek(0)
+    blob.upload_from_file(fileobj, rewind=True)
+    return f"gs://{GCS_BUCKET}/{name}"
 
-def parse_with_claude(content, schema):
-    try:
-        parsed = {"raw": "claude_output_here"}  # placeholder
-        logger.debug("Claude raw output: %s", parsed)
+def upload_bytes(name, data, content_type="application/json"):
+    bucket = storage_client.bucket(GCS_BUCKET)
+    blob = bucket.blob(name)
+    blob.upload_from_string(data, content_type=content_type)
+    return f"gs://{GCS_BUCKET}/{name}"
 
-        if not isinstance(parsed, dict):
-            logger.warning("Malformed Claude output, normalizing...")
-            parsed = {"normalized": str(parsed)}
+def read_inventory():
+    bucket = storage_client.bucket(GCS_BUCKET)
+    blob = bucket.blob(INVENTORY_BLOB)
+    if not blob.exists():
+        return pd.DataFrame(columns=["fields","date_uploaded","file_name","document_type"])
+    bio = io.BytesIO()
+    blob.download_to_file(bio)
+    bio.seek(0)
+    return pd.read_excel(bio)
 
-        normalized = {k: parsed.get(k, None) for k in schema.get("fields", [])}
-        logger.debug("Normalized output: %s", normalized)
-        return normalized
-    except Exception as e:
-        logger.error("Claude parsing failed: %s", e)
-        return {"error": str(e)}
+def write_inventory(df):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        df.to_excel(w, index=False)
+    out.seek(0)
+    upload_blob(INVENTORY_BLOB, out)
 
-def upload_to_gcs(file_name, file_bytes):
-    try:
-        client = storage.Client(project=PROJECT_ID, credentials=GCS_CREDENTIALS)
-        bucket = client.bucket(BUCKET_NAME)
-        blob = bucket.blob(file_name)
-        blob.upload_from_string(file_bytes)
-        logger.debug("Uploaded %s to GCS bucket %s", file_name, BUCKET_NAME)
-        return f"gs://{BUCKET_NAME}/{file_name}"
-    except Exception as e:
-        logger.error("Upload failed: %s", e)
-        return {"error": str(e)}
+def base_name(fname):
+    return fname.rsplit(".",1)[0]
 
-# === STREAMLIT APP ENTRYPOINT ===
-def main():
-    st.title("Claude Parser App")
+# -----------------------------
+# Sidebar menu
+# -----------------------------
+menu = st.sidebar.radio("Menu", ["Claude Parsing"])
 
-    schema = load_schema()
+if menu == "Claude Parsing":
+    st.title("Claude Parser")
 
-    uploaded_file = st.file_uploader("Upload a document", type=["pdf", "png", "jpg", "jpeg"])
-    if uploaded_file:
-        preview_document(uploaded_file)
+    schemas = read_schema(SCHEMA_FILE)
+    if not schemas:
+        st.stop()
 
-        file_bytes = uploaded_file.getvalue()
-        gcs_path = upload_to_gcs(uploaded_file.name, file_bytes)
-        st.write(f"Uploaded to: {gcs_path}")
+    doc_type = st.selectbox("Document type", list(schemas.keys()))
+    schema_df = schemas[doc_type]
 
-        parsed_output = parse_with_claude(file_bytes, schema)
-        st.json(parsed_output)
+    uploaded = st.file_uploader("Upload file", type=["pdf","png","jpg","jpeg"])
+    if uploaded:
+        meta = preview(uploaded)
 
-if __name__ == "__main__":
-    main()
+        if st.button("Confirm & Parse"):
+            prompt = build_prompt(doc_type, schema_df)
+            content = meta["text"] if uploaded.type=="application/pdf" else "Image document."
+            raw = call_claude(prompt, content)
+            parsed = parse_json(raw)
+
+            if parsed:
+                st.success("Parsed fields:")
+                df = pd.DataFrame([{"field":k,"value":v} for k,v in parsed.items()])
+                st.dataframe(df)
+
+                if st.button("Submit"):
+                    # Upload original
+                    uri_img = upload_blob(uploaded.name, uploaded)
+                    # Upload parsed JSON
+                    parsed_name = f"{base_name(uploaded.name)}{PARSED_SUFFIX}"
+                    uri_parsed = upload_bytes(parsed_name, json.dumps(parsed,indent=2).encode())
+                    # Update inventory
+                    inv = read_inventory()
+                    new_row = {
+                        "fields": ", ".join(parsed.keys()),
+                        "date_uploaded": datetime.datetime.utcnow().isoformat(),
+                        "file_name": uploaded.name,
+                        "document_type": doc_type
+                    }
+                    inv = pd.concat([inv,pd.DataFrame([new_row])],ignore_index=True)
+                    write_inventory(inv)
+                    st.success("Uploaded and inventory updated.")
+                    st.write(uri_img)
+                    st.write(uri_parsed)
