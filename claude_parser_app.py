@@ -2,20 +2,29 @@ import os
 import time
 import uuid
 import hashlib
-import requests
+import base64
+import json
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 from google.cloud import storage
 from google.oauth2 import service_account
+import anthropic
 
 # ========== Config ==========
 APP_TITLE = "Claude Receipt Parser (Flattened Master Inventory in GCS)"
-BASE_URL = "https://api.anthropic.com/v1"
-MODEL_DEFAULT = "claude-haiku-4.5"
+MODEL_DEFAULT = "claude-sonnet-4-5-20250929"  # default model
 MAX_UPLOAD_MB = 15
 ALLOWED_EXTS = ["jpg", "jpeg", "png", "pdf"]
-MASTER_CSV_NAME = "parsed_inventory.csv"   # single master file in GCS
+MASTER_CSV_NAME = "parsed_inventory.csv"
+
+# Pricing per million tokens (Nov 2025)
+PRICING = {
+    "claude-haiku-4-5-20250929": {"input": 0.25, "output": 1.25},
+    "claude-sonnet-4-5-20250929": {"input": 3.00, "output": 15.00},
+    "claude-opus-4-5-20250929": {"input": 15.00, "output": 75.00},
+}
+STARTING_CREDIT = 4.90  # your initial credit
 
 # ========== Secrets ==========
 CLAUDE_KEY = st.secrets["claudeparser-key"]
@@ -25,6 +34,8 @@ gcs_creds_info = st.secrets["gcs"]
 gcs_credentials = service_account.Credentials.from_service_account_info(gcs_creds_info)
 gcs_client = storage.Client(project=GOOGLE_CLOUD_PROJECT, credentials=gcs_credentials)
 gcs_bucket = gcs_client.bucket(GCS_BUCKET)
+
+client = anthropic.Anthropic(api_key=CLAUDE_KEY)
 
 # ========== Helpers ==========
 def human_bytes(n: int) -> str:
@@ -50,42 +61,34 @@ def file_hash(path: str) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def upload_file_to_anthropic(file_path: str, filename: str) -> str:
-    headers = {
-        "x-api-key": CLAUDE_KEY,
-        "anthropic-version": "2023-06-01",
-    }
+def call_claude_with_image(model: str, file_path: str, instruction: str):
     with open(file_path, "rb") as f:
-        resp = requests.post(
-            f"{BASE_URL}/files",
-            headers=headers,
-            files={"file": (filename, f, "application/octet-stream")},
-        )
-    resp.raise_for_status()
-    return resp.json()["id"]
+        base64_data = base64.b64encode(f.read()).decode("utf-8")
 
-def call_claude_with_file(model: str, file_id: str, instruction: str):
-    headers = {
-        "x-api-key": CLAUDE_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    data = {
-        "model": model,
-        "max_tokens": 800,
-        "messages": [
+    message = client.messages.create(
+        model=model,
+        max_tokens=2000,
+        messages=[
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": instruction},
-                    {"type": "file", "file_id": file_id},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",  # adjust if PNG/PDF
+                            "data": base64_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": instruction,
+                    },
                 ],
             }
         ],
-    }
-    resp = requests.post(f"{BASE_URL}/messages", headers=headers, json=data)
-    resp.raise_for_status()
-    return resp.json()
+    )
+    return message
 
 def load_master_inventory() -> pd.DataFrame:
     blob = gcs_bucket.blob(MASTER_CSV_NAME)
@@ -109,49 +112,45 @@ def upload_to_gcs(local_path: str, dest_name: str):
     blob.upload_from_filename(local_path)
     return f"gs://{GCS_BUCKET}/{dest_name}"
 
-def flatten_result(filename: str, file_path: str, result: dict):
-    """Extract key fields from Claude JSON into flat row."""
-    content = None
-    if "content" in result and isinstance(result["content"], list):
-        for block in result["content"]:
-            if block.get("type") == "text":
-                try:
-                    import json
-                    content = json.loads(block["text"])
-                except Exception:
-                    pass
-    if not content:
-        return None
+def flatten_result(filename: str, file_path: str, message):
+    parsed_json = None
+    for block in message.content:
+        if block.type == "text":
+            try:
+                parsed_json = json.loads(block.text)
+            except Exception:
+                pass
+    if not parsed_json:
+        return None, None
 
     row = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "filename": filename,
         "file_hash": file_hash(file_path),
-        "vendor_name": content.get("vendor_name"),
-        "store_location": content.get("store_location"),
-        "date": content.get("date"),
-        "time": content.get("time"),
-        "currency": content.get("currency"),
-        "total_amount": content.get("total_amount"),
-        "subtotal": content.get("subtotal"),
-        "rounding": content.get("rounding"),
-        "payment_method": content.get("payment_method"),
-        "invoice_number": content.get("invoice_number"),
-        "loyalty_account": content.get("loyalty_account"),
-        "loyalty_opening": content.get("loyalty_points", {}).get("opening_balance"),
-        "loyalty_earned": content.get("loyalty_points", {}).get("earned"),
-        "loyalty_closing": content.get("loyalty_points", {}).get("closing_balance"),
-        "line_items": str(content.get("line_items")),
+        "vendor_name": parsed_json.get("vendor_name"),
+        "store_location": parsed_json.get("store_location"),
+        "date": parsed_json.get("date"),
+        "time": parsed_json.get("time"),
+        "currency": parsed_json.get("currency"),
+        "total_amount": parsed_json.get("total_amount"),
+        "subtotal": parsed_json.get("subtotal"),
+        "rounding": parsed_json.get("rounding"),
+        "payment_method": parsed_json.get("payment_method"),
+        "invoice_number": parsed_json.get("invoice_number"),
+        "loyalty_account": parsed_json.get("loyalty_account"),
+        "loyalty_opening": parsed_json.get("loyalty_points", {}).get("opening_balance"),
+        "loyalty_earned": parsed_json.get("loyalty_points", {}).get("earned"),
+        "loyalty_closing": parsed_json.get("loyalty_points", {}).get("closing_balance"),
+        "line_items": str(parsed_json.get("line_items")),
     }
-    return row, content
+    return row, parsed_json
 
-def append_to_inventory(filename: str, file_path: str, result: dict):
+def append_to_inventory(filename: str, file_path: str, message):
     df = load_master_inventory()
-    row_content = flatten_result(filename, file_path, result)
-    if not row_content:
+    row, parsed_json = flatten_result(filename, file_path, message)
+    if not row:
         st.error("Could not flatten Claude response into schema.")
         return df, False, None
-    row, parsed_json = row_content
 
     if row["file_hash"] in df["file_hash"].values:
         st.warning("Duplicate receipt detected — not added to inventory.")
@@ -162,7 +161,6 @@ def append_to_inventory(filename: str, file_path: str, result: dict):
     return df, True, parsed_json
 
 def display_receipt_json(receipt_json: dict):
-    """Render receipt JSON in a human-readable format inside Streamlit."""
     st.subheader("🧾 Receipt Summary")
     st.write(f"**Vendor:** {receipt_json.get('vendor_name')}")
     st.write(f"**Store Location:** {receipt_json.get('store_location')}")
@@ -187,20 +185,20 @@ def display_receipt_json(receipt_json: dict):
         df = pd.DataFrame(receipt_json["line_items"])
         st.dataframe(df)
 
-# ========== UI ==========
-st.title(APP_TITLE)
-st.caption("Upload a receipt, parse with Claude, confirm to save unique flattened results + image into GCS.")
+def calculate_cost(model: str, usage: dict, credit_remaining: float):
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
 
-uploaded_file = st.file_uploader("Upload a receipt image or PDF", type=ALLOWED_EXTS)
+    rate_in = PRICING[model]["input"] / 1_000_000
+    rate_out = PRICING[model]["output"] / 1_000_000
 
-instruction_default = """
-You are an audit‑grade receipt parser. From the attached file, extract:
-- Vendor name
-- Date
-- Currency and total amount
-- Line items (description, quantity, unit price, line total)
-- Payment method
-Return a concise JSON object with these fields. If text is unclear, mark fields as null with a reason.
-"""
-instruction = st.text_area("Parsing instruction", instruction_default, height=160)
-model = st
+    cost_in = input_tokens * rate_in
+    cost_out = output_tokens * rate_out
+    total_cost = cost_in + cost_out
+
+    new_credit = credit_remaining - total_cost
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens
