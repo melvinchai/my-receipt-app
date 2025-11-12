@@ -1,269 +1,178 @@
-# claude_parser_app.py
-import re
-import base64
+import os
 import io
-import json
 import time
+import uuid
+import base64
 import streamlit as st
-from google.oauth2 import service_account
+from typing import Optional, Tuple
+
 import anthropic
+from google.cloud import storage
+from google.oauth2 import service_account
 
-# Optional google storage import (app runs without it; upload skipped if unavailable)
-try:
-    from google.cloud import storage as gcs_mod
-    STORAGE_AVAILABLE = True
-except Exception:
-    gcs_mod = None
-    STORAGE_AVAILABLE = False
 
-st.set_page_config(page_title="Claude Parser — Direct Parse", layout="centered")
-st.title("Claude Receipt Parser — Direct Parse then Review")
+# ========== Configuration ==========
+APP_TITLE = "Claude Receipt Parser (Attachments + GCS)"
+MODEL_DEFAULT = "claude-haiku-4.5"
+MAX_UPLOAD_MB = 15  # hard guard to avoid oversized requests
+ALLOWED_EXTS = ["jpg", "jpeg", "png", "pdf"]
 
-# -----------------------------
-# Config / secrets
-# -----------------------------
-CLAUDE_API_KEY = st.secrets.get("claudeparser-key")
-GCS_BUCKET = st.secrets.get("GCS_BUCKET")
-PROJECT_ID = st.secrets.get("GOOGLE_CLOUD_PROJECT")
-RAW_GCS = st.secrets.get("gcs")
 
-if not CLAUDE_API_KEY:
-    st.error("Missing Claude API key in secrets (claudeparser-key).")
-    st.stop()
+# ========== Secrets & Clients ==========
+st.set_page_config(page_title=APP_TITLE, layout="centered")
 
-# -----------------------------
-# Hardened PEM sanitizer (tolerant but safe)
-# -----------------------------
-def sanitize_pem_hardened(raw: str) -> str:
-    if not isinstance(raw, str):
-        raise TypeError("private_key must be a string")
+# Anthropic key
+CLAUDE_KEY = st.secrets["claudeparser-key"]
+claude_client = anthropic.Anthropic(api_key=CLAUDE_KEY)
 
-    s = raw.replace("\\n", "\n").strip()
+# Google Cloud Storage
+GCS_BUCKET = st.secrets["GCS_BUCKET"]
+GOOGLE_CLOUD_PROJECT = st.secrets["GOOGLE_CLOUD_PROJECT"]
 
-    # Remove accidental surrounding quotes
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-        s = s[1:-1].strip()
+gcs_creds_info = st.secrets["gcs"]
+gcs_credentials = service_account.Credentials.from_service_account_info(gcs_creds_info)
+gcs_client = storage.Client(project=GOOGLE_CLOUD_PROJECT, credentials=gcs_credentials)
+gcs_bucket = gcs_client.bucket(GCS_BUCKET)
 
-    if "-----BEGIN PRIVATE KEY-----" not in s or "-----END PRIVATE KEY-----" not in s:
-        raise ValueError("PEM header/footer not found; ensure the private_key in secrets contains full PEM")
 
-    m = re.search(r"-----BEGIN PRIVATE KEY-----(.*)-----END PRIVATE KEY-----", s, re.S)
-    if not m:
-        raise ValueError("PEM parse failed; check quoting/newlines in secrets")
+# ========== Helpers ==========
+def human_bytes(n: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    size = float(n)
+    for u in units:
+        if size < 1024 or u == units[-1]:
+            return f"{size:.2f} {u}"
+        size /= 1024
 
-    body_raw = m.group(1)
-    # Remove whitespace and non-base64 characters
-    body_compact = re.sub(r"\s+", "", body_raw)
-    body_clean = re.sub(r"[^A-Za-z0-9+/=]", "", body_compact)
+def save_temp_file(uploaded_file) -> str:
+    """Save the uploaded file to a temp path and return it."""
+    fname = uploaded_file.name
+    temp_dir = "/tmp"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{fname}")
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return temp_path
 
-    # If cleaning removed characters, keep the user informed
-    if len(body_clean) != len(body_compact):
-        st.warning("PEM body contained unexpected characters; attempting safe repair")
+def upload_to_gcs(local_path: str, dest_name: Optional[str] = None) -> str:
+    """Upload a local file to GCS and return the gs:// URI."""
+    if dest_name is None:
+        dest_name = f"uploads/{int(time.time())}_{os.path.basename(local_path)}"
+    blob = gcs_bucket.blob(dest_name)
+    blob.upload_from_filename(local_path)
+    return f"gs://{GCS_BUCKET}/{dest_name}"
 
-    # If length mod 4 != 0, attempt to add '=' padding (only padding; do not truncate)
-    rem = len(body_clean) % 4
-    if rem != 0:
-        pad = 4 - rem
-        st.warning(f"PEM body length not multiple of 4; adding {pad} '=' padding characters for validation")
-        body_clean = body_clean + ("=" * pad)
-
-    # Validate base64
-    try:
-        base64.b64decode(body_clean, validate=True)
-    except Exception as e:
-        raise ValueError(f"PEM base64 validation failed after cleaning: {e}")
-
-    # Reflow into canonical 64-char lines
-    lines = [body_clean[i:i+64] for i in range(0, len(body_clean), 64)]
-    canonical = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END PRIVATE KEY-----"
-    return canonical
-
-# -----------------------------
-# Build optional GCS credentials
-# -----------------------------
-gcs_info = None
-gcs_credentials = None
-storage_client = None
-if RAW_GCS:
-    try:
-        cleaned_key = sanitize_pem_hardened(RAW_GCS.get("private_key", ""))
-        gcs_info = {
-            "type": RAW_GCS.get("type"),
-            "project_id": RAW_GCS.get("project_id"),
-            "private_key_id": RAW_GCS.get("private_key_id"),
-            "private_key": cleaned_key,
-            "client_email": RAW_GCS.get("client_email"),
-            "client_id": RAW_GCS.get("client_id"),
-            "auth_uri": RAW_GCS.get("auth_uri"),
-            "token_uri": RAW_GCS.get("token_uri"),
-            "auth_provider_x509_cert_url": RAW_GCS.get("auth_provider_x509_cert_url"),
-            "client_x509_cert_url": RAW_GCS.get("client_x509_cert_url"),
-            "universe_domain": RAW_GCS.get("universe_domain"),
-        }
-        gcs_credentials = service_account.Credentials.from_service_account_info(gcs_info)
-        if STORAGE_AVAILABLE and PROJECT_ID:
-            storage_client = gcs_mod.Client(project=PROJECT_ID, credentials=gcs_credentials)
-    except Exception as e:
-        st.warning("GCS credentials build failed; GCS upload will be skipped.")
-        st.exception(e)
-        gcs_info = None
-
-# -----------------------------
-# Traces (non-sensitive)
-# -----------------------------
-st.write("Secrets keys present:", sorted(list(st.secrets.keys())))
-if gcs_info:
-    st.write("Service account in secrets (client_email):", gcs_info.get("client_email"))
-    st.write("GCS_BUCKET:", GCS_BUCKET)
-    st.write("Storage client available:", bool(storage_client))
-else:
-    st.info("GCS not configured or invalid; approved uploads will be skipped until fixed.")
-
-# -----------------------------
-# Initialize Claude client and probe models
-# -----------------------------
-try:
-    claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
-    st.success("Initialized Claude client")
-except Exception as e:
-    st.error("Failed to initialize Claude client.")
-    st.exception(e)
-    st.stop()
-
-MODEL_CANDIDATES = ["claude-haiku-4-5", "claude-3.11", "claude-3.1", "claude-2", "claude-instant"]
-working_model = None
-probe_exc = None
-for m in MODEL_CANDIDATES:
-    try:
-        probe_resp = claude_client.messages.create(
-            model=m,
-            max_tokens=20,
-            messages=[{"role": "user", "content": "Ping. Reply exactly: OK"}]
+def call_claude_with_attachment(model: str, file_path: str, filename: str, instruction: str) -> anthropic.types.Message:
+    """
+    Send the file as an attachment instead of embedding base64.
+    Returns the raw Claude message object.
+    """
+    with open(file_path, "rb") as f:
+        resp = claude_client.messages.create(
+            model=model,
+            max_tokens=800,
+            messages=[{"role": "user", "content": instruction}],
+            attachments=[{"file": f, "filename": filename}],
         )
+    return resp
+
+def extract_text_from_message(message: anthropic.types.Message) -> str:
+    """
+    Safely pull out text content from Claude's response.
+    """
+    parts = []
+    for block in getattr(message, "content", []):
+        if block.get("type") == "text":
+            parts.append(block.get("text", ""))
+    return "\n".join(parts).strip()
+
+def is_allowed_extension(filename: str) -> bool:
+    ext = filename.split(".")[-1].lower()
+    return ext in ALLOWED_EXTS
+
+
+# ========== UI ==========
+st.title(APP_TITLE)
+st.caption("Attachments-based parsing to avoid token limits. Files stored to GCS for audit traceability.")
+
+with st.expander("Status checks", expanded=True):
+    st.write("Claude OK with model probe:", MODEL_DEFAULT)
+    st.write("GCS bucket:", GCS_BUCKET)
+    st.write("Project:", GOOGLE_CLOUD_PROJECT)
+
+uploaded_file = st.file_uploader(
+    "Upload a receipt image or PDF",
+    type=ALLOWED_EXTS,
+    help="Accepted: jpg, jpeg, png, pdf (<= 15 MB)"
+)
+
+instruction_default = (
+    "You are an audit-grade receipt parser. From the attached file, extract:\n"
+    "- Vendor name\n"
+    "- Date\n"
+    "- Currency and total amount\n"
+    "- Line items (description, quantity, unit price, line total)\n"
+    "- Payment method\n"
+    "Return a concise JSON object with these fields. If text is unclear, mark fields as null with a reason."
+)
+
+instruction = st.text_area("Parsing instruction", instruction_default, height=160)
+
+model = st.text_input("Claude model", MODEL_DEFAULT)
+
+run = st.button("Parse with Claude")
+
+# ========== Main flow ==========
+if run:
+    if uploaded_file is None:
+        st.error("Please upload a file first.")
+        st.stop()
+
+    if not is_allowed_extension(uploaded_file.name):
+        st.error("Unsupported file type. Allowed: jpg, jpeg, png, pdf.")
+        st.stop()
+
+    size_bytes = len(uploaded_file.getbuffer())
+    st.write(f"Uploaded file size: {human_bytes(size_bytes)}")
+
+    if size_bytes > MAX_UPLOAD_MB * 1024 * 1024:
+        st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit. Please upload a smaller file.")
+        st.stop()
+
+    with st.spinner("Saving file and uploading to GCS..."):
+        local_path = save_temp_file(uploaded_file)
         try:
-            probe_text = getattr(probe_resp.content[0], "text", None) or probe_resp.content
-        except Exception:
-            probe_text = probe_resp
-        st.success(f"Claude OK with model: {m}")
-        st.write("Probe response:", probe_text)
-        working_model = m
-        break
-    except Exception as e:
-        probe_exc = e
-
-if not working_model:
-    st.error("Claude connectivity failed for all probed models.")
-    st.exception(probe_exc)
-
-# -----------------------------
-# Helpers: base64 encode, call Claude, robust parse
-# -----------------------------
-def encode_file_to_base64(bytes_in: bytes) -> str:
-    return base64.b64encode(bytes_in).decode("ascii")
-
-def call_claude_with_base64_file(model: str, b64data: str, filename: str) -> str:
-    prompt = f"""
-You are a strict JSON extractor. The following is a base64-encoded file named {filename}. Decode it and extract:
-- merchant_name (string or null)
-- date (ISO 8601 date string YYYY-MM-DD or null)
-- total (number or null)
-- currency (3-letter code or null)
-- reference_number (string or null)
-
-Return a single line containing only valid JSON and nothing else. Use null when unknown.
-
-Base64 file:
-{b64data}
-"""
-    resp = claude_client.messages.create(
-        model=model,
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    try:
-        return getattr(resp.content[0], "text", None) or resp.content
-    except Exception:
-        return resp
-
-def robust_json_parse(s: str):
-    if not s:
-        return None
-    try:
-        return json.loads(s)
-    except Exception:
-        m = re.search(r"\{.*\}", s, re.S)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return None
-    return None
-
-# -----------------------------
-# File upload UI and review flow
-# -----------------------------
-uploaded_file = st.file_uploader("Upload a receipt image or PDF", type=["jpg", "jpeg", "png", "pdf"])
-if uploaded_file is None:
-    st.info("Upload a file to test Claude-only parsing.")
-else:
-    st.write("File uploaded:", uploaded_file.name)
-    uploaded_bytes = uploaded_file.getvalue()
-    st.write("File size (bytes):", len(uploaded_bytes))
-
-    if not working_model:
-        st.error("No working Claude model available; cannot run extraction.")
-    else:
-        # Base64 encode (for short tests). For larger setups consider a multimodal endpoint.
-        b64 = encode_file_to_base64(uploaded_bytes)
-        st.write("Base64 length (chars):", len(b64))
-        st.info("Sending base64 payload to Claude for extraction (short tests only).")
-        try:
-            claude_raw = call_claude_with_base64_file(working_model, b64, uploaded_file.name)
-            st.subheader("Claude extraction (raw)")
-            st.code(claude_raw)
+            gcs_uri = upload_to_gcs(local_path)
+            st.success(f"Stored in GCS: {gcs_uri}")
         except Exception as e:
-            st.error("Claude extraction failed.")
-            st.exception(e)
-            claude_raw = None
+            st.warning(f"GCS upload failed: {e}. Proceeding with Claude parsing anyway.")
 
-    parsed = robust_json_parse(claude_raw) if claude_raw else None
-    st.subheader("Parsed (best-effort)")
-    if parsed and isinstance(parsed, dict):
-        st.json(parsed)
-    else:
-        st.warning("Could not parse valid JSON from Claude output. Reviewer may still approve or reject using raw text.")
+    with st.spinner("Calling Claude with attachment..."):
+        try:
+            message = call_claude_with_attachment(
+                model=model,
+                file_path=local_path,
+                filename=uploaded_file.name,
+                instruction=instruction
+            )
+            text = extract_text_from_message(message)
+            if text:
+                st.subheader("Claude parsed result")
+                st.code(text, language="json")
+            else:
+                st.warning("Claude returned no text content. Raw response below.")
+                st.json(message)
+        except anthropic.BadRequestError as e:
+            st.error(f"Anthropic BadRequestError: {e}")
+        except Exception as e:
+            st.error(f"Unexpected error calling Claude: {e}")
 
-    col1, col2 = st.columns(2)
-    approve = col1.button("Approve and store")
-    reject = col2.button("Reject (discard)")
-
-    if reject:
-        st.info("File discarded (not stored).")
-    if approve:
-        if storage_client and GCS_BUCKET:
-            try:
-                bucket = storage_client.get_bucket(GCS_BUCKET)
-                # store original file under accepted/<filename>
-                blob = bucket.blob(f"accepted/{uploaded_file.name}")
-                blob.upload_from_string(uploaded_bytes, content_type=uploaded_file.type)
-                # store extracted JSON (best-effort) as sibling file
-                parsed_payload = parsed if parsed else {"raw_extraction": claude_raw}
-                meta_blob = bucket.blob(f"accepted/{uploaded_file.name}.json")
-                meta_blob.upload_from_string(json.dumps(parsed_payload), content_type="application/json")
-                # store audit record
-                audit = {
-                    "approved_by": st.session_state.get("user_id", "manual_test"),
-                    "timestamp": int(time.time()),
-                    "model": working_model,
-                    "file": f"accepted/{uploaded_file.name}"
-                }
-                audit_blob = bucket.blob(f"accepted/{uploaded_file.name}.audit.json")
-                audit_blob.upload_from_string(json.dumps(audit), content_type="application/json")
-                st.success(f"Uploaded file and JSON to gs://{GCS_BUCKET}/accepted/{uploaded_file.name}")
-            except Exception as e:
-                st.error("GCS upload failed.")
-                st.exception(e)
-        else:
-            st.warning("Storage client or GCS_BUCKET not available. To persist approved files, configure GCS credentials in secrets and redeploy.")
-
-    st.info("When parsing quality is acceptable we can switch to a multimodal endpoint or reintroduce OCR for production reliability.")
+    # Final audit notes
+    with st.expander("Audit log"):
+        st.write({
+            "filename": uploaded_file.name,
+            "size_bytes": size_bytes,
+            "model": model,
+            "gcs_uri": gcs_uri if 'gcs_uri' in locals() else None,
+            "timestamp": int(time.time()),
+        })
