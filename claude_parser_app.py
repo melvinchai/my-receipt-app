@@ -3,6 +3,7 @@ import json
 import logging
 import streamlit as st
 from google.cloud import storage
+from google.oauth2 import service_account
 from pathlib import Path
 from PIL import Image, ImageOps
 from PyPDF2 import PdfReader
@@ -17,8 +18,9 @@ logger = logging.getLogger("claude_parser")
 
 # === CONFIG ===
 SCHEMA_PATH = Path("schemas/default_schema.json")
-BUCKET_NAME = os.getenv("GCS_BUCKET", "my-doc-inventory")
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+BUCKET_NAME = st.secrets["GCS_BUCKET"]
+PROJECT_ID = st.secrets["GOOGLE_CLOUD_PROJECT"]
+GCS_CREDENTIALS = service_account.Credentials.from_service_account_info(st.secrets["gcs"])
 
 # === UTILITIES ===
 def load_schema():
@@ -44,11 +46,8 @@ def preview_document(uploaded_file):
             logger.debug("PDF preview rendered vertically")
         else:
             image = Image.open(uploaded_file)
-
-            # Respect EXIF orientation only — no extra manual rotation
             image = ImageOps.exif_transpose(image)
-
-            st.image(image, caption="Uploaded Image Preview (Correct Orientation)", use_column_width=True)
+            st.image(image, caption="Uploaded Image Preview", use_column_width=True)
             logger.debug("Image preview rendered with correct orientation")
     except Exception as e:
         logger.error("Preview failed: %s", e)
@@ -61,12 +60,10 @@ def parse_with_claude(content, schema):
         parsed = {"raw": "claude_output_here"}  # simulate
         logger.debug("Claude raw output: %s", parsed)
 
-        # Defensive normalization
         if not isinstance(parsed, dict):
             logger.warning("Malformed Claude output, normalizing...")
             parsed = {"normalized": str(parsed)}
 
-        # Apply schema discipline
         normalized = {k: parsed.get(k, None) for k in schema.get("fields", [])}
         logger.debug("Normalized output: %s", normalized)
         return normalized
@@ -77,7 +74,7 @@ def parse_with_claude(content, schema):
 def upload_to_gcs(file_name, file_bytes):
     """Upload file to GCS and track inventory."""
     try:
-        client = storage.Client(project=PROJECT_ID)
+        client = storage.Client(project=PROJECT_ID, credentials=GCS_CREDENTIALS)
         bucket = client.bucket(BUCKET_NAME)
         blob = bucket.blob(file_name)
         blob.upload_from_string(file_bytes)
@@ -95,15 +92,12 @@ def main():
 
     uploaded_file = st.file_uploader("Upload a document", type=["pdf", "png", "jpg", "jpeg"])
     if uploaded_file:
-        # Vertical preview with correct orientation
         preview_document(uploaded_file)
 
-        # Upload to GCS
         file_bytes = uploaded_file.getvalue()
         gcs_path = upload_to_gcs(uploaded_file.name, file_bytes)
         st.write(f"Uploaded to: {gcs_path}")
 
-        # Simulate Claude parsing
         parsed_output = parse_with_claude(file_bytes, schema)
         st.json(parsed_output)
 
