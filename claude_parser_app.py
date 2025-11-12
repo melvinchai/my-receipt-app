@@ -31,10 +31,14 @@ def sanitize_pem(raw: str) -> str:
     if not isinstance(raw, str):
         raise TypeError("private_key must be a string")
 
-    # Convert escaped sequences if someone pasted JSON with \n escapes
+    # Convert escaped sequences if someone pasted JSON with \n escapes, trim
     s = raw.replace("\\n", "\n").strip()
 
-    # Find header/footer tolerant to stray whitespace/quotes
+    # Remove surrounding quotes if accidentally included
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+
+    # Locate header/footer tolerant to stray whitespace/characters
     start = s.find("-----BEGIN PRIVATE KEY-----")
     end = s.find("-----END PRIVATE KEY-----")
     if start == -1 or end == -1:
