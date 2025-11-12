@@ -44,7 +44,12 @@ def preview_document(uploaded_file):
             logger.debug("PDF preview rendered vertically")
         else:
             image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Image Preview", use_column_width=True)
+
+            # Rotate image to ensure vertical orientation if needed
+            if image.width > image.height:
+                image = image.rotate(90, expand=True)
+
+            st.image(image, caption="Uploaded Image Preview (Vertical)", use_column_width=True)
             logger.debug("Image preview rendered vertically")
     except Exception as e:
         logger.error("Preview failed: %s", e)
