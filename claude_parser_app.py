@@ -1,3 +1,4 @@
+# claude_parser_app.py
 import re
 import base64
 import streamlit as st
@@ -5,14 +6,11 @@ from google.cloud import storage
 from google.oauth2 import service_account
 import anthropic
 
-# -----------------------------
-# Streamlit page config
-# -----------------------------
+# Streamlit UI
 st.set_page_config(page_title="Claude Parser", layout="centered")
+st.title("Claude Receipt Parser")
 
-# -----------------------------
 # Load top-level secrets
-# -----------------------------
 CLAUDE_API_KEY = st.secrets.get("claudeparser-key")
 GCS_BUCKET = st.secrets.get("GCS_BUCKET")
 PROJECT_ID = st.secrets.get("GOOGLE_CLOUD_PROJECT")
@@ -25,29 +23,28 @@ if not PROJECT_ID or not GCS_BUCKET:
     st.stop()
 
 # -----------------------------
-# Helper: sanitize private_key into canonical PEM
+# PEM sanitizer (robust)
 # -----------------------------
 def sanitize_pem(raw: str) -> str:
     if not isinstance(raw, str):
         raise TypeError("private_key must be a string")
 
-    # Convert escaped sequences if someone pasted JSON with \n escapes, trim
+    # convert escaped newlines and trim
     s = raw.replace("\\n", "\n").strip()
 
-    # Remove surrounding quotes if accidentally included
+    # remove surrounding quotes if present
     if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
         s = s[1:-1].strip()
 
-    # Locate header/footer tolerant to stray whitespace/characters
+    # locate header/footer
     start = s.find("-----BEGIN PRIVATE KEY-----")
     end = s.find("-----END PRIVATE KEY-----")
     if start == -1 or end == -1:
         raise ValueError("PEM header/footer not found")
 
-    # Extract body between header and footer
     body = s[start + len("-----BEGIN PRIVATE KEY-----"):end]
 
-    # Clean every line: remove non-base64 chars (allow A-Z a-z 0-9 + / =)
+    # keep only base64 chars per line
     body_lines = []
     for line in body.splitlines():
         cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", line)
@@ -57,10 +54,9 @@ def sanitize_pem(raw: str) -> str:
     if not body_lines:
         raise ValueError("PEM body empty after cleaning")
 
-    # Rebuild canonical PEM
     canonical = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(body_lines) + "\n-----END PRIVATE KEY-----"
 
-    # Validate base64 decode of concatenated body
+    # validate base64
     try:
         base64.b64decode("".join(body_lines), validate=True)
     except Exception as e:
@@ -69,7 +65,7 @@ def sanitize_pem(raw: str) -> str:
     return canonical
 
 # -----------------------------
-# Build and normalize GCS service account dict explicitly
+# Build service account dict
 # -----------------------------
 raw_gcs = st.secrets.get("gcs")
 if not raw_gcs:
@@ -97,17 +93,13 @@ gcs_info = {
     "universe_domain": raw_gcs.get("universe_domain"),
 }
 
-# Optional debug (temporary): show presence of keys
+# Temporary debug (remove in production)
 st.write("Secrets keys present:", sorted(list(st.secrets.keys())))
 st.write("GCS keys present:", sorted([k for k in gcs_info.keys() if gcs_info.get(k)]))
-
-# Safe preview (temporary): show first/last 60 chars of cleaned_key for structural checking
 st.write("private_key head:", cleaned_key[:60])
 st.write("private_key tail:", cleaned_key[-60:])
 
-# -----------------------------
-# Create credentials with guarded error handling
-# -----------------------------
+# Create credentials
 try:
     gcs_credentials = service_account.Credentials.from_service_account_info(gcs_info)
 except Exception as exc:
@@ -115,9 +107,7 @@ except Exception as exc:
     st.exception(exc)
     st.stop()
 
-# -----------------------------
 # Initialize clients
-# -----------------------------
 try:
     storage_client = storage.Client(project=PROJECT_ID, credentials=gcs_credentials)
 except Exception as exc:
@@ -133,28 +123,68 @@ except Exception as exc:
     st.stop()
 
 # -----------------------------
-# App UI / Logic
+# Model probe: try Haiku first, then fallbacks
 # -----------------------------
-st.title("Claude Receipt Parser")
+MODEL_CANDIDATES = [
+    "claude-haiku-4-5",  # recommended Haiku model (fast, cost-efficient)
+    "claude-3.11",
+    "claude-3.1",
+    "claude-2",
+    "claude-instant"
+]
 
+working_model = None
+probe_exc = None
+for m in MODEL_CANDIDATES:
+    try:
+        probe_resp = claude_client.messages.create(
+            model=m,
+            max_tokens=40,
+            messages=[{"role": "user", "content": "Ping. Confirm API connectivity and reply OK."}]
+        )
+        # robustly extract text
+        try:
+            text = getattr(probe_resp.content[0], "text", None) or probe_resp.content
+        except Exception:
+            text = probe_resp
+        st.success(f"Claude OK with model: {m}")
+        st.write(text)
+        working_model = m
+        break
+    except Exception as e:
+        probe_exc = e
+
+if not working_model:
+    st.error("Claude connectivity failed for all probed models. Confirm API key and accessible models in Anthropic Console.")
+    st.exception(probe_exc)
+    # do not stop; continue to let user inspect GCS result if helpful
+
+# -----------------------------
+# File upload and checks
+# -----------------------------
 uploaded_file = st.file_uploader("Upload a receipt image or PDF", type=["jpg", "jpeg", "png", "pdf"])
 
 if uploaded_file is not None:
     st.write("File uploaded:", uploaded_file.name)
 
-    # Test Claude connectivity
-    try:
-        response = claude_client.messages.create(
-            model="claude-3-opus-20240229",
-            max_tokens=100,
-            messages=[{"role": "user", "content": "Hello Claude, confirm API connectivity."}]
-        )
-        st.write("Claude test response:", getattr(response.content[0], "text", response.content))
-    except Exception as e:
-        st.error("Claude connectivity test failed.")
-        st.exception(e)
+    # Repeat a simple model check on the working model before parsing
+    if working_model:
+        try:
+            resp = claude_client.messages.create(
+                model=working_model,
+                max_tokens=120,
+                messages=[{"role": "user", "content": "Confirm you are ready to parse a receipt. Respond with single word OK."}]
+            )
+            try:
+                text = getattr(resp.content[0], "text", None) or resp.content
+            except Exception:
+                text = resp
+            st.write("Claude reply:", text)
+        except Exception as e:
+            st.error("Claude call failed on working model.")
+            st.exception(e)
 
-    # GCS sanity check: list or access bucket
+    # GCS check: confirm access to bucket
     try:
         bucket = storage_client.get_bucket(GCS_BUCKET)
         blobs = [b.name for b in bucket.list_blobs(max_results=5)]
@@ -163,4 +193,14 @@ if uploaded_file is not None:
         st.error("GCS bucket access failed.")
         st.exception(e)
 
-    # TODO: Add receipt parsing logic (upload -> Claude -> structured output)
+    # Placeholder: upload to GCS (optional) and parse flow scaffold
+    try:
+        blob = bucket.blob(f"uploads/{uploaded_file.name}")
+        blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
+        st.write("Uploaded file to GCS:", f"gs://{GCS_BUCKET}/uploads/{uploaded_file.name}")
+    except Exception as e:
+        st.error("Upload to GCS failed.")
+        st.exception(e)
+
+    # TODO: implement receipt -> Claude parsing prompt and structured mapping
+    st.info("Next: implement structured extraction prompt to Claude and map to JSON fields.")
