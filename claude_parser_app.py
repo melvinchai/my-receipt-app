@@ -45,12 +45,8 @@ def preview_document(uploaded_file):
         else:
             image = Image.open(uploaded_file)
 
-            # Respect EXIF orientation to avoid upside-down rotation
+            # Respect EXIF orientation only — no extra manual rotation
             image = ImageOps.exif_transpose(image)
-
-            # If still landscape, rotate once to make portrait
-            if image.width > image.height:
-                image = image.rotate(90, expand=True)
 
             st.image(image, caption="Uploaded Image Preview (Correct Orientation)", use_column_width=True)
             logger.debug("Image preview rendered with correct orientation")
