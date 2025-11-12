@@ -1,17 +1,21 @@
 import os
 import time
 import uuid
+import hashlib
 import requests
 import streamlit as st
+import pandas as pd
+from io import BytesIO
 from google.cloud import storage
 from google.oauth2 import service_account
 
 # ========== Config ==========
-APP_TITLE = "Claude Receipt Parser (REST API Attachments)"
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+APP_TITLE = "Claude Receipt Parser (Files API + Master Inventory in GCS)"
+BASE_URL = "https://api.anthropic.com/v1"
 MODEL_DEFAULT = "claude-haiku-4.5"
 MAX_UPLOAD_MB = 15
 ALLOWED_EXTS = ["jpg", "jpeg", "png", "pdf"]
+MASTER_CSV_NAME = "parsed_inventory.csv"   # single master file in GCS
 
 # ========== Secrets ==========
 CLAUDE_KEY = st.secrets["claudeparser-key"]
@@ -39,35 +43,90 @@ def save_temp_file(uploaded_file) -> str:
         f.write(uploaded_file.getbuffer())
     return temp_path
 
-def upload_to_gcs(local_path: str, dest_name: str = None) -> str:
-    if dest_name is None:
-        dest_name = f"uploads/{int(time.time())}_{os.path.basename(local_path)}"
-    blob = gcs_bucket.blob(dest_name)
-    blob.upload_from_filename(local_path)
-    return f"gs://{GCS_BUCKET}/{dest_name}"
+def file_hash(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-def call_claude_rest(model: str, file_path: str, filename: str, instruction: str):
+def upload_file_to_anthropic(file_path: str, filename: str) -> str:
     headers = {
         "x-api-key": CLAUDE_KEY,
         "anthropic-version": "2023-06-01",
     }
-    # multipart form-data: file + JSON fields
-    files = {
-        "file": (filename, open(file_path, "rb"), "application/octet-stream")
+    with open(file_path, "rb") as f:
+        resp = requests.post(
+            f"{BASE_URL}/files",
+            headers=headers,
+            files={"file": (filename, f, "application/octet-stream")},
+        )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+def call_claude_with_file(model: str, file_id: str, instruction: str):
+    headers = {
+        "x-api-key": CLAUDE_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
     }
     data = {
         "model": model,
         "max_tokens": 800,
         "messages": [
-            {"role": "user", "content": instruction}
-        ]
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": instruction},
+                    {"type": "file", "file_id": file_id},
+                ],
+            }
+        ],
     }
-    resp = requests.post(CLAUDE_API_URL, headers=headers, data={"model": model, "max_tokens": 800}, files=files)
+    resp = requests.post(f"{BASE_URL}/messages", headers=headers, json=data)
+    resp.raise_for_status()
     return resp.json()
+
+def load_master_inventory() -> pd.DataFrame:
+    blob = gcs_bucket.blob(MASTER_CSV_NAME)
+    if blob.exists():
+        data = blob.download_as_bytes()
+        return pd.read_csv(BytesIO(data))
+    else:
+        return pd.DataFrame(columns=["timestamp","filename","file_hash","input_tokens","output_tokens","response_json"])
+
+def save_master_inventory(df: pd.DataFrame):
+    blob = gcs_bucket.blob(MASTER_CSV_NAME)
+    blob.upload_from_string(df.to_csv(index=False), content_type="text/csv")
+
+def upload_to_gcs(local_path: str, dest_name: str):
+    blob = gcs_bucket.blob(dest_name)
+    blob.upload_from_filename(local_path)
+    return f"gs://{GCS_BUCKET}/{dest_name}"
+
+def append_to_inventory(filename: str, file_path: str, result: dict):
+    usage = result.get("usage", {})
+    row = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "filename": filename,
+        "file_hash": file_hash(file_path),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "response_json": str(result),
+    }
+
+    df = load_master_inventory()
+    if row["file_hash"] in df["file_hash"].values:
+        st.warning("Duplicate receipt detected — not added to inventory.")
+        return df, False  # duplicate
+
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    save_master_inventory(df)
+    return df, True  # new entry
 
 # ========== UI ==========
 st.title(APP_TITLE)
-st.caption("Send receipt image/PDF directly to Claude via REST API attachments.")
+st.caption("Upload a receipt, parse with Claude, confirm to save unique results + image into GCS.")
 
 uploaded_file = st.file_uploader("Upload a receipt image or PDF", type=ALLOWED_EXTS)
 
@@ -82,7 +141,7 @@ Return a concise JSON object with these fields. If text is unclear, mark fields 
 """
 instruction = st.text_area("Parsing instruction", instruction_default, height=160)
 model = st.text_input("Claude model", MODEL_DEFAULT)
-run = st.button("Parse with Claude (REST API)")
+run = st.button("Parse with Claude (Files API)")
 
 if run:
     if uploaded_file is None:
@@ -95,23 +154,51 @@ if run:
         st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
         st.stop()
 
-    with st.spinner("Saving file and uploading to GCS..."):
+    with st.spinner("Saving file locally..."):
         local_path = save_temp_file(uploaded_file)
-        try:
-            gcs_uri = upload_to_gcs(local_path)
-            st.success(f"Stored in GCS: {gcs_uri}")
-        except Exception as e:
-            st.warning(f"GCS upload failed: {e}")
 
-    with st.spinner("Calling Claude REST API..."):
+    with st.spinner("Uploading file to Anthropic..."):
         try:
-            result = call_claude_rest(model, local_path, uploaded_file.name, instruction)
+            file_id = upload_file_to_anthropic(local_path, uploaded_file.name)
+            st.success(f"Uploaded to Anthropic, file_id: {file_id}")
+        except Exception as e:
+            st.error(f"Error uploading to Anthropic: {e}")
+            st.stop()
+
+    with st.spinner("Calling Claude with file reference..."):
+        try:
+            result = call_claude_with_file(model, file_id, instruction)
             st.subheader("Claude response")
             st.json(result)
 
-            # Show token usage if available
             if "usage" in result:
-                st.write("Token usage:")
+                st.subheader("Token usage")
                 st.json(result["usage"])
+
+            if st.button("Confirm and save to master inventory"):
+                df, is_new = append_to_inventory(uploaded_file.name, local_path, result)
+                if is_new:
+                    try:
+                        dest_name = f"receipts/{uploaded_file.name}"
+                        gcs_uri = upload_to_gcs(local_path, dest_name)
+                        st.success(f"Result saved. Image also stored in GCS: {gcs_uri}")
+                    except Exception as e:
+                        st.warning(f"Image upload failed: {e}")
+                else:
+                    st.info("Duplicate detected — image not uploaded again.")
+
+                # Preview master inventory
+                st.subheader("Master Inventory Preview")
+                st.dataframe(df)
+
+                # Download master CSV
+                blob = gcs_bucket.blob(MASTER_CSV_NAME)
+                data = blob.download_as_bytes()
+                st.download_button(
+                    "Download master inventory CSV",
+                    data=data,
+                    file_name=MASTER_CSV_NAME,
+                    mime="text/csv",
+                )
         except Exception as e:
-            st.error(f"Error calling Claude REST API: {e}")
+            st.error(f"Error calling Claude: {e}")
