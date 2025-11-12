@@ -20,4 +20,49 @@ pandas>=2.1.0
 openpyxl>=3.1.2
 
 # Claude / Anthropic SDK
-anthropic>=0.36.0
+# Core app framework
+streamlit>=1.30.0
+
+# Google Cloud libraries
+google-cloud-storage>=2.14.0
+google-cloud-documentai>=2.25.0
+google-auth>=2.23.0
+gcsfs>=2023.9.0
+
+# Image and PDF handling
+Pillow>=10.0.0
+PyPDF2>=3.0.0
+pymupdf>=1.23.0
+pdf2image>=1.17.0
+pdfplumber>=0.10.0
+pytesseract>=0.3.10
+
+# Data handling
+pandas>=2.1.0
+openpyxl>=3.1.2
+
+# Claude / Anthropic SDK
+# Core app framework
+streamlit>=1.30.0
+
+# Google Cloud libraries
+google-cloud-storage>=2.14.0
+google-cloud-documentai>=2.25.0
+google-auth>=2.23.0
+gcsfs>=2023.9.0
+
+# Image and PDF handling
+Pillow>=10.0.0
+PyPDF2>=3.0.0
+pymupdf>=1.23.0
+pdf2image>=1.17.0
+pdfplumber>=0.10.0
+pytesseract>=0.3.10
+
+# Data handling
+pandas>=2.1.0
+openpyxl>=3.1.2
+
+# Claude / Anthropic SDK
+anthropic>=0.40.0
+
