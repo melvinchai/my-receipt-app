@@ -1,8 +1,9 @@
+import re
+import base64
 import streamlit as st
 from google.cloud import storage
 from google.oauth2 import service_account
 import anthropic
-import textwrap
 
 # -----------------------------
 # Streamlit page config
@@ -16,13 +17,52 @@ CLAUDE_API_KEY = st.secrets.get("claudeparser-key")
 GCS_BUCKET = st.secrets.get("GCS_BUCKET")
 PROJECT_ID = st.secrets.get("GOOGLE_CLOUD_PROJECT")
 
-# Quick checks
 if not CLAUDE_API_KEY:
     st.error("Missing Claude API key in secrets (claudeparser-key).")
     st.stop()
 if not PROJECT_ID or not GCS_BUCKET:
     st.error("Missing GCS project or bucket in secrets.")
     st.stop()
+
+# -----------------------------
+# Helper: sanitize private_key into canonical PEM
+# -----------------------------
+def sanitize_pem(raw: str) -> str:
+    if not isinstance(raw, str):
+        raise TypeError("private_key must be a string")
+
+    # Convert escaped sequences if someone pasted JSON with \n escapes
+    s = raw.replace("\\n", "\n").strip()
+
+    # Find header/footer tolerant to stray whitespace/quotes
+    start = s.find("-----BEGIN PRIVATE KEY-----")
+    end = s.find("-----END PRIVATE KEY-----")
+    if start == -1 or end == -1:
+        raise ValueError("PEM header/footer not found")
+
+    # Extract body between header and footer
+    body = s[start + len("-----BEGIN PRIVATE KEY-----"):end]
+
+    # Clean every line: remove non-base64 chars (allow A-Z a-z 0-9 + / =)
+    body_lines = []
+    for line in body.splitlines():
+        cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", line)
+        if cleaned:
+            body_lines.append(cleaned)
+
+    if not body_lines:
+        raise ValueError("PEM body empty after cleaning")
+
+    # Rebuild canonical PEM
+    canonical = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(body_lines) + "\n-----END PRIVATE KEY-----"
+
+    # Validate base64 decode of concatenated body
+    try:
+        base64.b64decode("".join(body_lines), validate=True)
+    except Exception as e:
+        raise ValueError(f"PEM body failed base64 validation: {e}")
+
+    return canonical
 
 # -----------------------------
 # Build and normalize GCS service account dict explicitly
@@ -32,39 +72,18 @@ if not raw_gcs:
     st.error("Missing [gcs] block in secrets.toml")
     st.stop()
 
-def normalize_private_key(raw_key: str) -> str:
-    if not isinstance(raw_key, str):
-        raise TypeError("private_key must be a string")
-    # Remove surrounding whitespace
-    key = raw_key.strip()
-    # Convert literal escaped sequences if someone pasted JSON with \n escapes
-    key = key.replace("\\n", "\n")
-    # Collapse repeated blank lines (defensive)
-    key = "\n".join(line.rstrip() for line in key.splitlines())
-    return key
-
-# Compose the dict with exactly the keys Google expects
 try:
-    normalized_key = normalize_private_key(raw_gcs.get("private_key", ""))
+    cleaned_key = sanitize_pem(raw_gcs.get("private_key", ""))
 except Exception as e:
-    st.error(f"Failed to normalize private_key: {e}")
-    st.stop()
-
-# Basic validation before handing to google's loader
-if not normalized_key.startswith("-----BEGIN PRIVATE KEY-----"):
-    st.error("Private key is malformed: missing BEGIN header")
-    st.code(normalized_key[:200])
-    st.stop()
-if not normalized_key.strip().endswith("-----END PRIVATE KEY-----"):
-    st.error("Private key is malformed: missing END footer")
-    st.code(normalized_key[-200:])
+    st.error("Private key sanitize failed")
+    st.exception(e)
     st.stop()
 
 gcs_info = {
     "type": raw_gcs.get("type"),
     "project_id": raw_gcs.get("project_id"),
     "private_key_id": raw_gcs.get("private_key_id"),
-    "private_key": normalized_key,
+    "private_key": cleaned_key,
     "client_email": raw_gcs.get("client_email"),
     "client_id": raw_gcs.get("client_id"),
     "auth_uri": raw_gcs.get("auth_uri"),
@@ -74,9 +93,13 @@ gcs_info = {
     "universe_domain": raw_gcs.get("universe_domain"),
 }
 
-# Optional debug: show keys present (not values)
+# Optional debug (temporary): show presence of keys
 st.write("Secrets keys present:", sorted(list(st.secrets.keys())))
 st.write("GCS keys present:", sorted([k for k in gcs_info.keys() if gcs_info.get(k)]))
+
+# Safe preview (temporary): show first/last 60 chars of cleaned_key for structural checking
+st.write("private_key head:", cleaned_key[:60])
+st.write("private_key tail:", cleaned_key[-60:])
 
 # -----------------------------
 # Create credentials with guarded error handling
@@ -127,12 +150,13 @@ if uploaded_file is not None:
         st.error("Claude connectivity test failed.")
         st.exception(e)
 
-    # Optional test: list buckets (sanity check for storage client)
+    # GCS sanity check: list or access bucket
     try:
-        buckets = [b.name for b in storage_client.list_buckets(page_size=10)]
-        st.write("Sample buckets:", buckets)
+        bucket = storage_client.get_bucket(GCS_BUCKET)
+        blobs = [b.name for b in bucket.list_blobs(max_results=5)]
+        st.write("Bucket OK, sample objects:", blobs)
     except Exception as e:
-        st.error("GCS list_buckets test failed.")
+        st.error("GCS bucket access failed.")
         st.exception(e)
 
-    # TODO: Add receipt parsing logic here (upload -> Claude -> structured table)
+    # TODO: Add receipt parsing logic (upload -> Claude -> structured output)
