@@ -201,4 +201,13 @@ def calculate_cost(model: str, usage: dict, credit_remaining: float):
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "total_tokens
+        "total_tokens": usage.get("total_tokens", input_tokens + output_tokens),
+        "cost_in": round(cost_in, 4),
+        "cost_out": round(cost_out, 4),
+        "total_cost": round(total_cost, 4),
+        "credit_remaining": round(new_credit, 4),
+    }
+
+# ========== UI ==========
+st.title(APP_TITLE)
+st
