@@ -18,12 +18,19 @@ PROJECT_ID = st.secrets["GOOGLE_CLOUD_PROJECT"]
 # -----------------------------
 # Normalize private_key from triple-quoted TOML
 # -----------------------------
-gcs_info = dict(st.secrets["gcs"])
-if "private_key" in gcs_info:
-    # Strip stray whitespace
-    gcs_info["private_key"] = gcs_info["private_key"].strip()
-    # Convert escaped newlines if present
-    gcs_info["private_key"] = gcs_info["private_key"].replace("\\n", "\n")
+gcs_info = {
+    "type": st.secrets["gcs"]["type"],
+    "project_id": st.secrets["gcs"]["project_id"],
+    "private_key_id": st.secrets["gcs"]["private_key_id"],
+    "private_key": st.secrets["gcs"]["private_key"].replace("\\n", "\n").strip(),
+    "client_email": st.secrets["gcs"]["client_email"],
+    "client_id": st.secrets["gcs"]["client_id"],
+    "auth_uri": st.secrets["gcs"]["auth_uri"],
+    "token_uri": st.secrets["gcs"]["token_uri"],
+    "auth_provider_x509_cert_url": st.secrets["gcs"]["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": st.secrets["gcs"]["client_x509_cert_url"],
+    "universe_domain": st.secrets["gcs"]["universe_domain"],
+}
 
 # Build credentials explicitly
 gcs_credentials = service_account.Credentials.from_service_account_info(gcs_info)
