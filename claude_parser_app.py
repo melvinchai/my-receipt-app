@@ -1,7 +1,6 @@
 import os
 import time
 import uuid
-import hashlib
 import base64
 import json
 import streamlit as st
@@ -16,7 +15,7 @@ APP_TITLE = "Claude Receipt Parser (Minimal Inventory)"
 MODEL_DEFAULT = "claude-sonnet-4-5-20250929"
 MAX_UPLOAD_MB = 15
 ALLOWED_EXTS = ["jpg", "jpeg", "png", "pdf"]
-MASTER_CSV_NAME = "parsed_inventory.csv"
+MASTER_CSV_NAME = "uploads/parsed_inventory.csv"
 
 # ========== Secrets ==========
 CLAUDE_KEY = st.secrets["claudeparser-key"]
@@ -46,13 +45,6 @@ def save_temp_file(uploaded_file) -> str:
         f.write(uploaded_file.getbuffer())
     return temp_path
 
-def file_hash(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
 def call_claude_with_image(model: str, file_path: str, instruction: str):
     with open(file_path, "rb") as f:
         data = f.read()
@@ -65,30 +57,37 @@ def call_claude_with_image(model: str, file_path: str, instruction: str):
     elif lower.endswith(".pdf"):
         media_type = "application/pdf"
 
-    message = client.messages.create(
-        model=model,
-        max_tokens=2000,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": base64_data,
+    st.info("Sending request to Claude...")
+    st.write({"model": model, "instruction_preview": instruction[:120] + "..."})
+
+    try:
+        message = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": base64_data,
+                            },
                         },
-                    },
-                    {
-                        "type": "text",
-                        "text": instruction,
-                    },
-                ],
-            }
-        ],
-    )
-    return message
+                        {"type": "text", "text": instruction},
+                    ],
+                }
+            ],
+        )
+        st.success("Claude responded.")
+        st.write("Raw Claude content blocks:")
+        st.write(message.content)
+        return message
+    except Exception as e:
+        st.error(f"Error calling Claude: {e}")
+        return None
 
 def load_master_inventory() -> pd.DataFrame:
     blob = gcs_bucket.blob(MASTER_CSV_NAME)
@@ -111,17 +110,25 @@ def upload_to_gcs(local_path: str, dest_name: str):
     return f"gs://{GCS_BUCKET}/{dest_name}"
 
 def flatten_result(filename: str, file_path: str, message):
+    if not message:
+        st.error("No message object returned from Claude.")
+        return None, None
+
     parsed_json = None
     for block in getattr(message, "content", []):
         block_type = getattr(block, "type", None) or (isinstance(block, dict) and block.get("type"))
         block_text = getattr(block, "text", None) or (isinstance(block, dict) and block.get("text"))
-        if block_type == "text" and block_text:
+        st.write(f"Block type: {block_type}")
+        if block_text:
+            st.text(f"Block text preview: {block_text[:200]}...")
             try:
                 parsed_json = json.loads(block_text)
+                st.success("Successfully parsed JSON.")
                 break
-            except Exception:
-                continue
+            except Exception as e:
+                st.warning(f"JSON parse failed: {e}")
     if not parsed_json:
+        st.error("No valid JSON found in Claude response.")
         return None, None
 
     row = {
@@ -135,20 +142,14 @@ def flatten_result(filename: str, file_path: str, message):
     }
     return row, parsed_json
 
-def append_to_inventory(filename: str, file_path: str, message):
+def append_to_inventory(row: dict):
     df = load_master_inventory()
-    row, parsed_json = flatten_result(filename, file_path, message)
-    if not row:
-        st.error("Could not flatten Claude response into schema.")
-        return df, False, None
-
     if not df.empty and row["filename"] in df["filename"].values:
         st.warning("Duplicate receipt detected — not added to inventory.")
-        return df, False, parsed_json
-
+        return df, False
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     save_master_inventory(df)
-    return df, True, parsed_json
+    return df, True
 
 def save_list_file(filename: str, parsed_json: dict):
     lines = [
@@ -203,10 +204,4 @@ if uploaded_file is not None:
     if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
         st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
     else:
-        temp_path = save_temp_file(uploaded_file)
-
-        # Upload image to GCS
-        gcs_uri = upload_to_gcs(temp_path, f"uploads/{uploaded_file.name}")
-        st.success(f"Uploaded to GCS: {gcs_uri}")
-
-        # Prompt Claude
+        temp_path = save
