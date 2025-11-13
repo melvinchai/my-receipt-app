@@ -210,4 +210,6 @@ def calculate_cost(model: str, usage: dict, credit_remaining: float):
 
 # ========== UI ==========
 st.title(APP_TITLE)
-st.caption("Upload your receipt below (PDF or image up
+st.caption("Upload your receipt below (PDF or image up to 15 MB)")
+
+uploaded
