@@ -204,4 +204,40 @@ if uploaded_file is not None:
     if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
         st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
     else:
-        temp_path = save
+        # FIXED: call the helper correctly
+        temp_path = save_temp_file(uploaded_file)
+
+        # Prompt Claude
+        instruction = (
+            "You are an audit‑grade receipt parser. From the attached file, extract:\n"
+            "- Vendor name\n- Date\n- Currency and total amount\n"
+            "- Line items (description, quantity, unit price, line total)\n"
+            "- Payment method\n- Invoice number (if any)\n"
+            "Return only a valid JSON object with these fields."
+        )
+        message = call_claude_with_image(MODEL_DEFAULT, temp_path, instruction)
+
+        row, parsed_json = flatten_result(uploaded_file.name, temp_path, message)
+
+        if not parsed_json:
+            st.error("Parse failed — nothing uploaded to GCS.")
+        else:
+            # Show parsed JSON in human-readable form
+            display_receipt_list(parsed_json)
+
+            # Confirmation step
+            if st.button("Confirm Upload"):
+                # Upload image
+                gcs_uri = upload_to_gcs(temp_path, f"uploads/{uploaded_file.name}")
+                st.success(f"Uploaded to GCS: {gcs_uri}")
+
+                # Save .list file
+                list_uri = save_list_file(uploaded_file.name, parsed_json)
+                st.success(f"List file saved to GCS: {list_uri}")
+
+                # Append to inventory
+                df, added = append_to_inventory(row)
+                if added:
+                    st.success("Receipt added to inventory.")
+                st.subheader("📊 Master Inventory")
+                st.dataframe(df)
