@@ -184,7 +184,7 @@ def save_list_file(filename: str, parsed_json: dict):
     uri = upload_string_to_gcs(content, dest_name, content_type="text/plain")
     return uri
 
-def display_receipt_list(parsed_json: dict, usage: dict):
+def display_receipt_list(parsed_json: dict, usage):
     st.subheader("🧾 Receipt summary")
     st.write(f"**Vendor:** {parsed_json.get('vendor_name')}")
     st.write(f"**Receipt date/time:** {parsed_json.get('date')} {parsed_json.get('time')}")
@@ -197,9 +197,12 @@ def display_receipt_list(parsed_json: dict, usage: dict):
     if not df.empty:
         st.dataframe(df)
     if usage:
-        st.caption(f"🔢 Tokens used — Prompt: {usage.get('input_tokens')}, "
-                   f"Completion: {usage.get('output_tokens')}, "
-                   f"Total: {usage.get('total_tokens')}")
+        try:
+            st.caption(f"🔢 Tokens used — Prompt: {usage.input_tokens}, "
+                       f"Completion: {usage.output_tokens}, "
+                       f"Total: {usage.total_tokens}")
+        except Exception:
+            st.caption("🔢 Token usage not available")
 
 def build_instruction() -> str:
     return (
@@ -223,78 +226,90 @@ def build_instruction() -> str:
         "- Food & Beverage, Transport, Office Supplies, Utilities → claimable\n"
         "- Alcohol, personal entertainment, personal shopping → not claimable\n\n"
         "Return only a valid JSON object with those keys. Do not include prose or Markdown."
-         )
+    )
+
+# ========== Inventory helpers ==========
+def load_master_inventory() -> pd.DataFrame:
+    blob = gcs_bucket.blob(MASTER_CSV_NAME)
+    if not blob.exists():
+        df = pd.DataFrame(columns=[
+            "system_date","system_time","date","filename","vendor_name","total_amount","invoice_number"
+        ])
+        blob.upload_from_string(df.to_csv(index=False), content_type="text/csv")
+        return df
+    data = blob.download_as_bytes()
+    return pd.read_csv(BytesIO(data))
+
+def append_to_inventory(row: dict):
+    df = load_master_inventory()
+    # dedupe by filename + invoice_number if present
+    key_cols = ["filename", "invoice_number"]
+    if not df.empty and "filename" in df.columns and "invoice_number" in df.columns:
+        is_dup = ((df["filename"] == row.get("filename")) &
+                  (df["invoice_number"].fillna("") == (row.get("invoice_number") or ""))).any()
+        if is_dup:
+            return df, False
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    gcs_bucket.blob(MASTER_CSV_NAME).upload_from_string(df.to_csv(index=False), content_type="text/csv")
+    return df, True
 # ========== UI ==========
 st.title(APP_TITLE)
 st.caption("Upload a receipt image (JPEG/PDF) and its raw OCR JSON. "
-           "Claude Sonnet will parse audit‑grade JSON using OCR as authoritative, "
-           "cross‑checking against the image. Each line item will be tagged with "
-           "expense_category and claimable status. These outputs are uploaded to GCS "
-           "and serve as input for reimbursement determination in a later phase.")
+           "Claude will parse authoritative JSON using OCR as the source, "
+           "cross-checking against the image. Each line item will be tagged with "
+           "expense_category and claimable status. Outputs are uploaded to GCS "
+           "for the later reimbursement policy phase.")
 
-# Upload widgets
 uploaded_file = st.file_uploader("Choose a receipt image", type=ALLOWED_EXTS)
 ocr_file = st.file_uploader("Upload raw OCR JSON", type=["json"])
 
 if uploaded_file and ocr_file:
     st.write(f"File uploaded: {uploaded_file.name} ({human_bytes(uploaded_file.size)})")
 
-    # Size guard
     if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
         st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
     else:
-        # Save locally only (no GCS upload yet)
         temp_path = save_temp_file(uploaded_file)
         st.info(f"Temporary file saved: {temp_path}")
 
-        # Load OCR JSON
         try:
             ocr_json = json.load(ocr_file)
         except Exception as e:
             st.error(f"Failed to parse OCR JSON: {e}")
             st.stop()
 
-        # Prompt Claude with both image + OCR JSON
         instruction = build_instruction()
         message = call_claude_with_image_and_json(MODEL_DEFAULT, temp_path, ocr_json, instruction)
 
-        # Parse result and build minimal row
         row, parsed_json, usage = flatten_result(uploaded_file.name, temp_path, message)
 
         if not parsed_json:
-            st.error("Parse failed. Nothing will be uploaded. Inspect traces above and adjust the prompt or input.")
+            st.error("Parse failed. Nothing will be uploaded. Inspect logs and adjust the prompt or input.")
         else:
-            # Display human-readable summary with token usage
             display_receipt_list(parsed_json, usage)
 
-            # Show the minimal row that would go into the inventory
             st.subheader("📄 Inventory record (pending confirmation)")
             st.write(row)
 
-            # Confirmation step: only on click do we upload and append
             if st.button("Confirm upload to GCS and append to inventory"):
-                # Versioned image upload
                 versioned_name = versioned_filename(uploaded_file.name)
                 dest_image = f"uploads/{versioned_name}"
                 gcs_image_uri = upload_to_gcs(temp_path, dest_image)
-                st.success(f"Image uploaded to GCS: {gcs_image_uri}")
+                st.success(f"Image uploaded: {gcs_image_uri}")
 
-                # Save .list file alongside image
                 list_uri = save_list_file(versioned_name, parsed_json)
-                st.success(f"List file uploaded to GCS: {list_uri}")
+                st.success(f"List file uploaded: {list_uri}")
 
-                # Save JSON file alongside image
                 json_filename = versioned_name.rsplit(".", 1)[0] + ".json"
                 dest_json = f"uploads/{json_filename}"
                 upload_string_to_gcs(json.dumps(parsed_json, indent=2), dest_json, content_type="application/json")
-                st.success(f"JSON file uploaded to GCS: gs://{GCS_BUCKET}/{dest_json}")
+                st.success(f"JSON uploaded: gs://{GCS_BUCKET}/{dest_json}")
 
-                # Append to inventory CSV in GCS
                 df, added = append_to_inventory(row)
                 if added:
                     st.success("Inventory record appended.")
                 else:
-                    st.warning("Inventory record not appended (likely duplicate).")
+                    st.warning("Inventory not appended (likely duplicate).")
 
                 st.subheader("📊 Master inventory (from GCS)")
                 df_latest = load_master_inventory()
