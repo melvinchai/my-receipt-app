@@ -5,7 +5,7 @@ import streamlit as st
 from PIL import Image, ImageOps
 from google.cloud import vision
 
-st.set_page_config(page_title="Google Vision OCR", layout="centered")
+st.set_page_config(page_title="Google Vision OCR", layout="wide")
 st.title("🧾 Audit‑grade OCR Viewer")
 
 # ---------- Vision client ----------
@@ -31,10 +31,10 @@ file_ext = uploaded_file.name.lower().split(".")[-1]
 if file_ext in ["jpg","jpeg","png"]:
     img = Image.open(io.BytesIO(file_bytes))
     img = ImageOps.exif_transpose(img)
-    st.image(img, caption="Uploaded Image", use_column_width=True)
     image = vision.Image(content=file_bytes)
 else:
     st.info("📄 PDF uploaded — Vision will process the first page")
+    img = None
     image = vision.Image(content=file_bytes)
 
 # ---------- OCR ----------
@@ -46,25 +46,34 @@ if response.error.message:
 full_text = response.full_text_annotation.text or ""
 lines = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
 
-# ---------- Display ----------
-st.subheader("📜 Raw OCR Text")
-st.text(full_text)
-
-st.subheader("🔎 Raw OCR Rows (for audit)")
-for i, ln in enumerate(lines, start=1):
-    st.text(f"Row {i}: {ln}")
-
-# ---------- Audit artifacts ----------
+# ---------- Build audit JSON ----------
 structured = {
     "filename": uploaded_file.name,
     "ocr_text": full_text,
     "raw_rows": lines
 }
 
-st.subheader("📂 Audit Artifacts")
-st.download_button("Raw OCR text (.txt)", full_text, "ocr_raw.txt", "text/plain")
-st.download_button("Structured JSON (.json)", json.dumps(structured, indent=2), "vision_receipt.json", "application/json")
-st.download_button("Original file", file_bytes, uploaded_file.name,
-                   mime="application/pdf" if file_ext=="pdf" else f"image/{file_ext}")
+# ---------- Side‑by‑side layout ----------
+col1, col2 = st.columns([1, 1])
 
-st.caption("Audit‑only mode: no merchant info, no line items, no totals. Just raw OCR + artifacts.")
+with col1:
+    st.subheader("🖼️ Original Receipt")
+    if img:
+        st.image(img, caption="Uploaded Receipt", use_column_width=True)
+    else:
+        st.info("PDF uploaded — cannot preview inline")
+
+with col2:
+    st.subheader("📜 Raw OCR Text (Audit)")
+    st.text(full_text)
+
+    st.subheader("📂 Structured JSON (Audit)")
+    st.json(structured)
+
+    # Optional download buttons
+    st.download_button("Download OCR Text", full_text, "ocr_raw.txt", "text/plain")
+    st.download_button("Download JSON", json.dumps(structured, indent=2), "vision_receipt.json", "application/json")
+    st.download_button("Download Original File", file_bytes, uploaded_file.name,
+                       mime="application/pdf" if file_ext=="pdf" else f"image/{file_ext}")
+
+st.caption("Audit‑only mode: image and extracted data side by side, with optional downloads.")
