@@ -223,8 +223,12 @@ def build_instruction() -> str:
     return (
         "You are an audit‑grade receipt parser. Use the OCR JSON as authoritative. "
         "Cross-check against the attached image. Extract exactly these fields:\n"
-        "- vendor_name\n- date\n- currency\n- total_amount\n- payment_method\n"
-        "- invoice_number (if any)\n
+        "- vendor_name\n"
+        "- date\n"
+        "- currency\n"
+        "- total_amount\n"
+        "- payment_method\n
+
 # ========== UI ==========
 st.title(APP_TITLE)
 st.caption("Upload a receipt image (JPEG/PDF) and its raw OCR JSON. "
@@ -293,3 +297,5 @@ if uploaded_file and ocr_file:
                 st.dataframe(df_latest)
 else:
     st.info("Upload both a receipt image and OCR JSON to begin parsing.")
+
+        
