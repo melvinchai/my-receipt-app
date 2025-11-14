@@ -8,9 +8,7 @@ st.title("🧠 Google Vision OCR Parser")
 
 # --- Authenticate using Streamlit secrets ---
 try:
-    # Convert AttrDict → dict before dumping
-    service_account_info = dict(st.secrets["gcs"])
-
+    service_account_info = dict(st.secrets["gcs"])  # Convert AttrDict → dict
     key_path = "/tmp/vision_key.json"
     with open(key_path, "w") as f:
         json.dump(service_account_info, f)
@@ -51,25 +49,60 @@ if uploaded_file:
             raise RuntimeError(response.error.message)
 
         full_text = response.full_text_annotation.text
-        st.subheader("📄 Extracted Text")
+        st.subheader("📄 Raw OCR Text")
         st.text(full_text)
 
-        # --- Build structured JSON ---
+        # --- Row grouping ---
+        def group_words_into_rows(response, y_tolerance=10):
+            rows, current_row, last_y = [], [], None
+            for page in response.full_text_annotation.pages:
+                for block in page.blocks:
+                    for para in block.paragraphs:
+                        for word in para.words:
+                            word_text = "".join([s.text for s in word.symbols])
+                            y = word.bounding_box.vertices[0].y
+                            if last_y is None or abs(y - last_y) <= y_tolerance:
+                                current_row.append(word_text)
+                            else:
+                                rows.append(current_row)
+                                current_row = [word_text]
+                            last_y = y
+            if current_row:
+                rows.append(current_row)
+            return rows
+
+        rows = group_words_into_rows(response)
+
+        # --- Parse row into structured fields ---
+        def parse_row(row):
+            try:
+                code = row[0]
+                qty_idx = next(i for i, t in enumerate(row) if t.startswith("x"))
+                at_idx = row.index("@")
+                eq_idx = row.index("=")
+
+                description = " ".join(row[1:qty_idx])
+                quantity = row[qty_idx].replace("x", "")
+                unit_price = row[at_idx + 1]
+                line_total = row[eq_idx + 1]
+
+                return {
+                    "code": {"value": code, "source": "OCR"},
+                    "description": {"value": description, "source": "OCR"},
+                    "quantity": {"value": quantity, "source": "OCR"},
+                    "unit_price": {"value": unit_price, "source": "OCR"},
+                    "line_total": {"value": line_total, "source": "OCR"}
+                }
+            except Exception:
+                return {"raw_row": " ".join(row), "source": "OCR"}
+
         structured = {
             "filename": uploaded_file.name,
-            "text": full_text,
-            "blocks": []
+            "ocr_text": full_text,
+            "items": [parse_row(row) for row in rows]
         }
-        for page in response.full_text_annotation.pages:
-            for block in page.blocks:
-                block_text = ""
-                for para in block.paragraphs:
-                    for word in para.words:
-                        word_text = "".join([s.text for s in word.symbols])
-                        block_text += word_text + " "
-                structured["blocks"].append(block_text.strip())
 
-        st.subheader("🧾 Structured JSON")
+        st.subheader("🧾 Extracted Line Items (Human‑Verifiable)")
         st.json(structured)
 
         st.download_button(
