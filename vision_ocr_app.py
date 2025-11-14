@@ -8,15 +8,22 @@ st.title("🧠 Google Vision OCR Parser")
 
 # --- Authenticate using Streamlit secrets ---
 try:
-    service_account_info = st.secrets["gcs"]
-    with open("/tmp/vision_key.json", "w") as f:
+    # Convert AttrDict → dict before dumping
+    service_account_info = dict(st.secrets["gcs"])
+
+    key_path = "/tmp/vision_key.json"
+    with open(key_path, "w") as f:
         json.dump(service_account_info, f)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/tmp/vision_key.json"
+
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
     client = vision.ImageAnnotatorClient()
     st.success("✅ Vision API client initialized")
+
 except Exception as e:
     st.error("❌ Failed to initialize Vision client")
+    st.write("🔍 Check if [gcs] block exists and private_key is properly escaped")
     st.exception(e)
+    st.stop()
 
 # --- Upload file ---
 uploaded_file = st.file_uploader("Upload a receipt (JPG, PNG, PDF)", type=["jpg", "jpeg", "png", "pdf"])
@@ -25,6 +32,7 @@ if uploaded_file:
         file_bytes = uploaded_file.read()
         file_ext = uploaded_file.name.lower().split(".")[-1]
 
+        # --- Display image preview ---
         if file_ext in ["jpg", "jpeg", "png"]:
             img = Image.open(io.BytesIO(file_bytes))
             img = ImageOps.exif_transpose(img)
@@ -73,5 +81,6 @@ if uploaded_file:
 
     except Exception as e:
         st.error("❌ OCR failed")
+        st.write("🔍 Check file format, Vision API response, and memory limits")
         st.exception(e)
         st.write(traceback.format_exc())
