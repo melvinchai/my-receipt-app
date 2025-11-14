@@ -222,7 +222,7 @@ def build_instruction() -> str:
         "Rules for claimable:\n"
         "- Food & Beverage, Transport, Office Supplies, Utilities → claimable\n"
         "- Alcohol, personal entertainment, personal shopping → not claimable\n\n"
-        "Return
+        "Return only a valid JSON object with those keys. Do not include prose or Markdown."
 # ========== UI ==========
 st.title(APP_TITLE)
 st.caption("Upload a receipt image (JPEG/PDF) and its raw OCR JSON. "
