@@ -1,5 +1,4 @@
 import os
-import time
 import uuid
 import base64
 import json
@@ -9,9 +8,10 @@ from io import BytesIO
 from google.cloud import storage
 from google.oauth2 import service_account
 import anthropic
+from datetime import datetime
 
 # ========== Config ==========
-APP_TITLE = "Claude Receipt Parser (Audit-Grade JSON)"
+APP_TITLE = "Claude Receipt Parser (Claimability Stage)"
 MODEL_DEFAULT = "claude-sonnet-4-5-20250929"
 MAX_UPLOAD_MB = 15
 ALLOWED_EXTS = ["jpg", "jpeg", "png", "pdf"]
@@ -45,8 +45,17 @@ def save_temp_file(uploaded_file) -> str:
         f.write(uploaded_file.getbuffer())
     return temp_path
 
+def versioned_filename(base_name: str) -> str:
+    """Ensure no overwrites in GCS by versioning filenames."""
+    name, ext = os.path.splitext(base_name)
+    counter = 1
+    new_name = base_name
+    while gcs_bucket.blob(f"uploads/{new_name}").exists():
+        counter += 1
+        new_name = f"{name}_v{counter}{ext}"
+    return new_name
+
 def call_claude_with_image_and_json(model: str, file_path: str, ocr_json: dict, instruction: str):
-    """Send both receipt image and authoritative OCR JSON to Claude Sonnet."""
     with open(file_path, "rb") as f:
         data = f.read()
     base64_data = base64.b64encode(data).decode("utf-8")
@@ -104,34 +113,43 @@ def clean_json_text(block_text: str) -> str:
             break
     if first_json_idx is not None:
         text = text[first_json_idx:]
-    open_braces = 0
-    end_idx = None
-    for i, ch in enumerate(text):
-        if ch == "{":
-            open_braces += 1
-        elif ch == "}":
-            open_braces -= 1
-            if open_braces == 0:
-                end_idx = i + 1
-                break
-    if end_idx:
-        text = text[:end_idx]
     return text.strip()
 
-def load_master_inventory() -> pd.DataFrame:
-    blob = gcs_bucket.blob(MASTER_CSV_NAME)
-    if blob.exists():
-        data = blob.download_as_bytes()
-        return pd.read_csv(BytesIO(data))
-    else:
-        return pd.DataFrame(columns=[
-            "system_date","system_time","date","filename",
-            "vendor_name","total_amount","invoice_number"
-        ])
+def flatten_result(filename: str, file_path: str, message):
+    if not message:
+        st.error("No message object returned from Claude.")
+        return None, None, None
+    parsed_json = None
+    for block in getattr(message, "content", []):
+        block_text = getattr(block, "text", None) or (isinstance(block, dict) and block.get("text"))
+        if not block_text:
+            continue
+        cleaned = clean_json_text(block_text)
+        try:
+            candidate = json.loads(cleaned)
+            parsed_json = candidate
+            break
+        except Exception:
+            continue
+    if not parsed_json:
+        return None, None, None
 
-def save_master_inventory(df: pd.DataFrame):
-    blob = gcs_bucket.blob(MASTER_CSV_NAME)
-    blob.upload_from_string(df.to_csv(index=False), content_type="text/csv")
+    now = datetime.now()
+    system_date = now.strftime("%Y-%m-%d")
+    system_time = now.strftime("%H:%M:%S")
+
+    row = {
+        "system_date": system_date,
+        "system_time": system_time,
+        "date": parsed_json.get("date"),
+        "filename": filename,
+        "vendor_name": parsed_json.get("vendor_name"),
+        "total_amount": parsed_json.get("total_amount"),
+        "invoice_number": parsed_json.get("invoice_number"),
+    }
+
+    usage = getattr(message, "usage", None)
+    return row, parsed_json, usage
 
 def upload_to_gcs(local_path: str, dest_name: str):
     blob = gcs_bucket.blob(dest_name)
@@ -143,52 +161,10 @@ def upload_string_to_gcs(content: str, dest_name: str, content_type: str = "text
     blob.upload_from_string(content, content_type=content_type)
     return f"gs://{GCS_BUCKET}/{dest_name}"
 
-def flatten_result(filename: str, file_path: str, message):
-    if not message:
-        st.error("No message object returned from Claude.")
-        return None, None
-    parsed_json = None
-    for idx, block in enumerate(getattr(message, "content", [])):
-        block_type = getattr(block, "type", None) or (isinstance(block, dict) and block.get("type"))
-        block_text = getattr(block, "text", None) or (isinstance(block, dict) and block.get("text"))
-        if block_text is None:
-            continue
-        cleaned = clean_json_text(block_text)
-        try:
-            candidate = json.loads(cleaned)
-            required = ["vendor_name","date","currency","total_amount","line_items","payment_method"]
-            missing = [k for k in required if k not in candidate]
-            if missing:
-                st.warning(f"JSON parsed but missing required keys: {missing}")
-            parsed_json = candidate
-            break
-        except Exception:
-            continue
-    if not parsed_json:
-        return None, None
-    row = {
-        "system_date": time.strftime("%Y-%m-%d"),
-        "system_time": time.strftime("%H:%M:%S"),
-        "date": parsed_json.get("date"),
-        "filename": filename,
-        "vendor_name": parsed_json.get("vendor_name"),
-        "total_amount": parsed_json.get("total_amount"),
-        "invoice_number": parsed_json.get("invoice_number"),
-    }
-    return row, parsed_json
-
-def append_to_inventory(row: dict):
-    df = load_master_inventory()
-    if not df.empty and row["filename"] in df["filename"].values and row["system_date"] in df["system_date"].values:
-        return df, False
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    save_master_inventory(df)
-    return df, True
-
 def save_list_file(filename: str, parsed_json: dict):
     lines = [
         f"Vendor: {parsed_json.get('vendor_name')}",
-        f"Date: {parsed_json.get('date')} {parsed_json.get('time')}",
+        f"Receipt Date: {parsed_json.get('date')} {parsed_json.get('time')}",
         f"Currency: {parsed_json.get('currency')}",
         f"Total Amount: {parsed_json.get('total_amount')}",
         f"Payment Method: {parsed_json.get('payment_method')}",
@@ -199,17 +175,19 @@ def save_list_file(filename: str, parsed_json: dict):
         qty = item.get("quantity")
         unit = item.get("unit_price")
         total = item.get("line_total")
-        lines.append(f" - {desc} x{qty} @ {unit} = {total}")
+        cat = item.get("expense_category")
+        claim = item.get("claimable")
+        lines.append(f" - {desc} x{qty} @ {unit} = {total} | {cat} | Claimable: {claim}")
     content = "\n".join(lines)
     list_filename = filename.rsplit(".", 1)[0] + ".list"
     dest_name = f"uploads/{list_filename}"
     uri = upload_string_to_gcs(content, dest_name, content_type="text/plain")
     return uri
 
-def display_receipt_list(parsed_json: dict):
+def display_receipt_list(parsed_json: dict, usage: dict):
     st.subheader("🧾 Receipt summary")
     st.write(f"**Vendor:** {parsed_json.get('vendor_name')}")
-    st.write(f"**Date:** {parsed_json.get('date')} {parsed_json.get('time')}")
+    st.write(f"**Receipt date/time:** {parsed_json.get('date')} {parsed_json.get('time')}")
     st.write(f"**Currency:** {parsed_json.get('currency')}")
     st.write(f"**Total amount:** {parsed_json.get('total_amount')}")
     st.write(f"**Payment method:** {parsed_json.get('payment_method')}")
@@ -218,6 +196,10 @@ def display_receipt_list(parsed_json: dict):
     df = pd.DataFrame(items)
     if not df.empty:
         st.dataframe(df)
+    if usage:
+        st.caption(f"🔢 Tokens used — Prompt: {usage.get('input_tokens')}, "
+                   f"Completion: {usage.get('output_tokens')}, "
+                   f"Total: {usage.get('total_tokens')}")
 
 def build_instruction() -> str:
     return (
@@ -229,78 +211,15 @@ def build_instruction() -> str:
         "- total_amount\n"
         "- payment_method\n"
         "- invoice_number (if any)\n"
-        "- line_items (array of objects with keys: description, code (if any), quantity, unit_price, line_total)\n\n"
-        "Return only a valid JSON object with those keys. Do not include any prose, explanations, or Markdown. "
-        "Do not wrap the JSON in backticks. Do not add extra fields. Ensure JSON is complete and syntactically valid."
-    )
-
-# ========== UI ==========
-st.title(APP_TITLE)
-st.caption("Upload a receipt image (JPEG/PDF) and its raw OCR JSON. "
-           "Claude Sonnet will parse audit‑grade JSON using OCR as authoritative, "
-           "cross‑checking against the image. Review before confirming upload to GCS.")
-
-# Upload widgets
-uploaded_file = st.file_uploader("Choose a receipt image", type=ALLOWED_EXTS)
-ocr_file = st.file_uploader("Upload raw OCR JSON", type=["json"])
-
-if uploaded_file and ocr_file:
-    st.write(f"File uploaded: {uploaded_file.name} ({human_bytes(uploaded_file.size)})")
-
-    # Size guard
-    if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
-        st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
-    else:
-        # Save locally only (no GCS upload yet)
-        temp_path = save_temp_file(uploaded_file)
-        st.info(f"Temporary file saved: {temp_path}")
-
-        # Load OCR JSON
-        try:
-            ocr_json = json.load(ocr_file)
-        except Exception as e:
-            st.error(f"Failed to parse OCR JSON: {e}")
-            st.stop()
-
-        # Prompt Claude with both image + OCR JSON
-        instruction = build_instruction()
-        message = call_claude_with_image_and_json(MODEL_DEFAULT, temp_path, ocr_json, instruction)
-
-        # Parse result and build minimal row
-        row, parsed_json = flatten_result(uploaded_file.name, temp_path, message)
-
-        if not parsed_json:
-            st.error("Parse failed. Nothing will be uploaded. Inspect traces above and adjust the prompt or input.")
-        else:
-            # Display human-readable summary
-            display_receipt_list(parsed_json)
-
-            # Show the minimal row that would go into the inventory
-            st.subheader("📄 Inventory record (pending confirmation)")
-            st.write(row)
-
-            # Confirmation step: only on click do we upload and append
-            if st.button("Confirm upload to GCS and append to inventory"):
-                # Upload image
-                dest_image = f"uploads/{uploaded_file.name}"
-                gcs_image_uri = upload_to_gcs(temp_path, dest_image)
-                st.success(f"Image uploaded to GCS: {gcs_image_uri}")
-
-                # Save .list file alongside image
-                list_uri = save_list_file(uploaded_file.name, parsed_json)
-                st.success(f"List file uploaded to GCS: {list_uri}")
-
-                # Append to inventory CSV in GCS
-                df, added = append_to_inventory(row)
-                if added:
-                    st.success("Inventory record appended.")
-                else:
-                    st.warning("Inventory record not appended (likely duplicate).")
-
-                st.subheader("📊 Master inventory (from GCS)")
-                df_latest = load_master_inventory()
-                st.dataframe(df_latest)
-else:
-    st.info("Upload both a receipt image and OCR JSON to begin parsing.")
-
-        
+        "- line_items (array of objects with keys: description, code (if any), quantity, unit_price, line_total, expense_category, claimable)\n\n"
+        "Rules for expense_category:\n"
+        "- Food & Beverage: meals, groceries, restaurants\n"
+        "- Transport: taxi, train, fuel, parking\n"
+        "- Office Supplies: stationery, printing, small equipment\n"
+        "- Utilities: electricity, internet, phone\n"
+        "- Entertainment: movies, alcohol, leisure\n"
+        "- Other: anything else\n\n"
+        "Rules for claimable:\n"
+        "- Food & Beverage, Transport, Office Supplies, Utilities → claimable\n"
+        "- Alcohol, personal entertainment, personal shopping → not claimable\n\n"
+        "Return
