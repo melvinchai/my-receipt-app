@@ -223,3 +223,80 @@ def build_instruction() -> str:
         "- Food & Beverage, Transport, Office Supplies, Utilities → claimable\n"
         "- Alcohol, personal entertainment, personal shopping → not claimable\n\n"
         "Return
+# ========== UI ==========
+st.title(APP_TITLE)
+st.caption("Upload a receipt image (JPEG/PDF) and its raw OCR JSON. "
+           "Claude Sonnet will parse audit‑grade JSON using OCR as authoritative, "
+           "cross‑checking against the image. Each line item will be tagged with "
+           "expense_category and claimable status. These outputs are uploaded to GCS "
+           "and serve as input for reimbursement determination in a later phase.")
+
+# Upload widgets
+uploaded_file = st.file_uploader("Choose a receipt image", type=ALLOWED_EXTS)
+ocr_file = st.file_uploader("Upload raw OCR JSON", type=["json"])
+
+if uploaded_file and ocr_file:
+    st.write(f"File uploaded: {uploaded_file.name} ({human_bytes(uploaded_file.size)})")
+
+    # Size guard
+    if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
+        st.error(f"File exceeds {MAX_UPLOAD_MB} MB limit.")
+    else:
+        # Save locally only (no GCS upload yet)
+        temp_path = save_temp_file(uploaded_file)
+        st.info(f"Temporary file saved: {temp_path}")
+
+        # Load OCR JSON
+        try:
+            ocr_json = json.load(ocr_file)
+        except Exception as e:
+            st.error(f"Failed to parse OCR JSON: {e}")
+            st.stop()
+
+        # Prompt Claude with both image + OCR JSON
+        instruction = build_instruction()
+        message = call_claude_with_image_and_json(MODEL_DEFAULT, temp_path, ocr_json, instruction)
+
+        # Parse result and build minimal row
+        row, parsed_json, usage = flatten_result(uploaded_file.name, temp_path, message)
+
+        if not parsed_json:
+            st.error("Parse failed. Nothing will be uploaded. Inspect traces above and adjust the prompt or input.")
+        else:
+            # Display human-readable summary with token usage
+            display_receipt_list(parsed_json, usage)
+
+            # Show the minimal row that would go into the inventory
+            st.subheader("📄 Inventory record (pending confirmation)")
+            st.write(row)
+
+            # Confirmation step: only on click do we upload and append
+            if st.button("Confirm upload to GCS and append to inventory"):
+                # Versioned image upload
+                versioned_name = versioned_filename(uploaded_file.name)
+                dest_image = f"uploads/{versioned_name}"
+                gcs_image_uri = upload_to_gcs(temp_path, dest_image)
+                st.success(f"Image uploaded to GCS: {gcs_image_uri}")
+
+                # Save .list file alongside image
+                list_uri = save_list_file(versioned_name, parsed_json)
+                st.success(f"List file uploaded to GCS: {list_uri}")
+
+                # Save JSON file alongside image
+                json_filename = versioned_name.rsplit(".", 1)[0] + ".json"
+                dest_json = f"uploads/{json_filename}"
+                upload_string_to_gcs(json.dumps(parsed_json, indent=2), dest_json, content_type="application/json")
+                st.success(f"JSON file uploaded to GCS: gs://{GCS_BUCKET}/{dest_json}")
+
+                # Append to inventory CSV in GCS
+                df, added = append_to_inventory(row)
+                if added:
+                    st.success("Inventory record appended.")
+                else:
+                    st.warning("Inventory record not appended (likely duplicate).")
+
+                st.subheader("📊 Master inventory (from GCS)")
+                df_latest = load_master_inventory()
+                st.dataframe(df_latest)
+else:
+    st.info("Upload both a receipt image and OCR JSON to begin parsing.")
