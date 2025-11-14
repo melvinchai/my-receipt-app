@@ -227,7 +227,12 @@ def build_instruction() -> str:
         "- date\n"
         "- currency\n"
         "- total_amount\n"
-        "- payment_method\n
+        "- payment_method\n"
+        "- invoice_number (if any)\n"
+        "- line_items (array of objects with keys: description, code (if any), quantity, unit_price, line_total)\n\n"
+        "Return only a valid JSON object with those keys. Do not include any prose, explanations, or Markdown. "
+        "Do not wrap the JSON in backticks. Do not add extra fields. Ensure JSON is complete and syntactically valid."
+    )
 
 # ========== UI ==========
 st.title(APP_TITLE)
