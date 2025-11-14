@@ -73,21 +73,9 @@ with col2:
         """,
         unsafe_allow_html=True
     )
+
+    # Download buttons grouped right under OCR text
     st.download_button("Download OCR Text", full_text, "ocr_raw.txt", "text/plain")
-
-    st.subheader("📂 Structured JSON (Audit)")
-    st.markdown(
-        f"""
-        <div style="border:1px solid #ccc; padding:10px; height:500px; overflow-y:scroll; white-space:pre-wrap;">
-        {json.dumps(structured, indent=2)}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
     st.download_button("Download JSON", json.dumps(structured, indent=2), "vision_receipt.json", "application/json")
-
-    st.subheader("📥 Original File")
     st.download_button("Download Original File", file_bytes, uploaded_file.name,
                        mime="application/pdf" if file_ext=="pdf" else f"image/{file_ext}")
-
-st.caption("Audit‑only mode: image and extracted data side by side, with scrollable panels.")
